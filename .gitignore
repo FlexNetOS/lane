@@ -3,3 +3,7 @@
 *.pdb
 .DS_Store
 .env
+
+# orchestration/meta artifacts (not part of the product)
+.workflows/
+.test_ro_check
