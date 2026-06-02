@@ -5,7 +5,7 @@ set -e
 #   lane_<version>_<os>_<arch>.tar.gz  (+ checksums.txt)
 # os ∈ {linux, darwin}, arch ∈ {amd64, arm64}.
 
-REPO="lane-sh/lane"
+REPO="drdave-flexnetos/lane"
 INSTALL_DIR="/usr/local/bin"
 
 log() {

@@ -26,7 +26,7 @@ locally-trusted CA) and full WebSocket passthrough for HMR. It's a complete Rust
 Build from source (requires Rust 1.82+):
 
 ```bash
-git clone https://github.com/lane-sh/lane.git
+git clone https://github.com/drdave-flexnetos/lane.git
 cd lane
 cargo build --release
 install -m0755 target/release/lane /usr/local/bin/lane
