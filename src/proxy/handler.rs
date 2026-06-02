@@ -36,8 +36,6 @@ pub struct PathRoute {
 #[derive(Clone, Debug, Default)]
 pub struct DomainRouter {
     pub default_port: u16,
-    /// Whether CORS handling is enabled for this domain's upstreams.
-    pub cors: bool,
     /// Path routes, sorted by prefix length descending.
     pub path_routes: Vec<PathRoute>,
 }
@@ -470,10 +468,9 @@ mod tests {
             },
         ];
         // Mirror server.applyConfig's sort: prefix length descending.
-        routes.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+        routes.sort_by_key(|r| std::cmp::Reverse(r.prefix.len()));
         DomainRouter {
             default_port: 3000,
-            cors: false,
             path_routes: routes,
         }
     }

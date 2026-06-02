@@ -572,6 +572,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     #[cfg(target_os = "linux")]
     fn verify_ca_is_trusted_not_found() {
         let (_guard, _home) = isolated_home();

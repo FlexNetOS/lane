@@ -136,13 +136,12 @@ impl Server {
                 })
                 .collect();
             // Sort by prefix length descending (Go: sort.Slice on prefix len).
-            path_routes.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+            path_routes.sort_by_key(|r| std::cmp::Reverse(r.prefix.len()));
 
             routers.insert(
                 d.name.clone(),
                 DomainRouter {
                     default_port: d.port,
-                    cors: cfg.cors,
                     path_routes,
                 },
             );

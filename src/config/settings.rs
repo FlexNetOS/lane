@@ -248,8 +248,11 @@ pub fn with_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     mkdir_all_mode(&dir()).context("creating config dir")?;
 
     let lock_path = dir().join("config.lock");
+    // Go used O_CREATE|O_RDONLY, which the OS allows; Rust's `OpenOptions`
+    // rejects `create` without `write`/`append`, so request write too. We only
+    // ever flock the descriptor — the file's contents are irrelevant.
     let mut opts = fs::OpenOptions::new();
-    opts.read(true).create(true).mode(0o644);
+    opts.read(true).write(true).create(true).mode(0o644);
     let file = opts.open(&lock_path).context("opening lock file")?;
 
     // Use the fs2 trait methods explicitly: on Rust >= 1.89 `std::fs::File`

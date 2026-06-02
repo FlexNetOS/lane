@@ -66,7 +66,7 @@ pub fn validate_subdomain(subdomain: &str) -> Result<()> {
     }
 
     let lower = subdomain.to_lowercase();
-    let normalized = lower.replace('-', "").replace('.', "");
+    let normalized = lower.replace(['-', '.'], "");
 
     for brand in BLOCKED_SUBDOMAINS {
         if normalized == *brand || normalized.contains(brand) {

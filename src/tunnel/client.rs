@@ -51,7 +51,13 @@ pub struct RequestEvent {
     pub duration: Duration,
 }
 
+/// Boxed `on_request` callback as supplied in [`ClientOptions`].
+type OnRequest = Box<dyn Fn(RequestEvent) + Send + Sync>;
+/// Shared, cloneable `on_request` callback handed to spawned forwarding tasks.
+type SharedOnRequest = Option<Arc<OnRequest>>;
+
 /// Options controlling a tunnel [`Client`].
+#[derive(Default)]
 pub struct ClientOptions {
     pub server_url: String,
     pub token: String,
@@ -60,22 +66,7 @@ pub struct ClientOptions {
     pub local_port: u16,
     pub password: String,
     pub ttl: Option<Duration>,
-    pub on_request: Option<Box<dyn Fn(RequestEvent) + Send + Sync>>,
-}
-
-impl Default for ClientOptions {
-    fn default() -> Self {
-        ClientOptions {
-            server_url: String::new(),
-            token: String::new(),
-            subdomain: String::new(),
-            domain: String::new(),
-            local_port: 0,
-            password: String::new(),
-            ttl: None,
-            on_request: None,
-        }
-    }
+    pub on_request: Option<OnRequest>,
 }
 
 /// Shared, immutable-after-connect dial configuration used by the read loop's
@@ -277,14 +268,8 @@ async fn read_loop(
     let mut backoff = Duration::from_secs(1);
 
     loop {
-        let close_code = read_messages(
-            &cfg,
-            local_port,
-            on_request.clone(),
-            sink.clone(),
-            &mut source,
-        )
-        .await;
+        let close_code =
+            read_messages(local_port, on_request.clone(), sink.clone(), &mut source).await;
 
         let reason = match close_code {
             // The connection closed cleanly with no error condition.
@@ -352,9 +337,8 @@ enum ReadOutcome {
 /// Read and dispatch binary frames until the connection drops. Spawns a 20s
 /// ping task for the lifetime of the session. Mirrors Go's `readMessages`.
 async fn read_messages(
-    cfg: &Arc<DialConfig>,
     local_port: u16,
-    on_request: Option<Arc<Box<dyn Fn(RequestEvent) + Send + Sync>>>,
+    on_request: SharedOnRequest,
     sink: Arc<Mutex<WsSink>>,
     source: &mut WsSource,
 ) -> ReadOutcome {
@@ -446,7 +430,7 @@ fn classify_error(err: tokio_tungstenite::tungstenite::Error) -> ReadOutcome {
 async fn handle_request(
     http_client: reqwest::Client,
     local_port: u16,
-    on_request: Option<Arc<Box<dyn Fn(RequestEvent) + Send + Sync>>>,
+    on_request: SharedOnRequest,
     sink: Arc<Mutex<WsSink>>,
     request_id: u32,
     req: proto::WireRequest,
@@ -531,7 +515,7 @@ async fn finish_and_send(
     reason: &str,
     headers: &[(String, String)],
     body: &[u8],
-    on_request: Option<Arc<Box<dyn Fn(RequestEvent) + Send + Sync>>>,
+    on_request: SharedOnRequest,
     method: String,
     path: String,
     start: Instant,
