@@ -181,3 +181,8 @@ cargo fmt --all
 
 [PolyForm Shield License 1.0.0](./LICENSE). A Rust port of `slim` by
 [Kamran Ahmed](https://github.com/kamranahmedse).
+
+## References and Acknowledgments
+
+- https://github.com/nilbuild/slim
+- https://github.com/rtk-ai/rtk
