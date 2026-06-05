@@ -24,9 +24,12 @@ construction crew (analyst → architect → implementer ⇄ verifier + Rust-nat
 build–verify–guard loops and an autonomous backlog mode.
 
 **Trigger:** For any request to add a feature, upgrade, enhance, extend, or change `lane` — or to run the
-crew autonomously on a backlog/loop — use the `intent-driven-development` skill. It also handles
-follow-ups (re-run, refine, "next intent", "work the backlog"). Simple questions about lane may be
-answered directly without the crew.
+crew autonomously on a backlog/loop within one session — use the `intent-driven-development` skill. It
+also handles follow-ups (re-run, refine, "next intent", "work the backlog"). For **durable, resumable,
+or unattended/self-restarting** operation across sessions ("resume", "pick up the loop", "ralph", "run
+unattended until done") use the `lane-loop` skill — it owns the loop + continuity + external `/new`
+runner layer and drives the same crew one backlog item per cycle. Simple questions about lane may be
+answered directly without either.
 
 **Change history:**
 | Date | Change | Target | Reason |
@@ -34,6 +37,7 @@ answered directly without the crew.
 | 2026-06-04 | Initial setup | All (5 agents, 6 skills) | Construction crew for intent-driven, agentic feature development |
 | 2026-06-04 | Add sub-agent fallback note | skills/intent-driven-development | Shakedown found TeamCreate/SendMessage unavailable; documented Agent-tool fallback + read-def/skill-by-path |
 | 2026-06-04 | Sync-to-latest + backlog dedup guards | skills/intent-driven-development | Parallel work off a stale base caused a duplicate Cargo.toml [workspace] and a near-miss cli/mod.rs collision; mandate fetch/pull before branching and diff backlog vs origin/main each iteration |
+| 2026-06-05 | Add autonomous loop + continuity + self-restart layer | skills/lane-loop, skills/session-relay, agents/continuity-steward, ralph-lane.sh; + trigger de-confliction in skills/intent-driven-development | Harness upgrade kit (`harness_hub/upgrade-kits/lane.md`): chain short sessions over a durable on-disk backlog so any restart resumes cold with zero loss; runner safe-by-default, `LANE_APPLY=1` opt-in for unattended apply (user-authorized) |
 
 ---
 
