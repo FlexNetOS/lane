@@ -383,11 +383,18 @@ pub fn ensure_proxy_ports_available() -> Result<()>;  // try bind :10080 & :1044
 ## src/doctor  (⇐ internal/doctor)
 
 ```rust
-pub enum Status { Pass, Warn, Fail }
+#[derive(Serialize)] #[serde(rename_all = "lowercase")]
+pub enum Status { Pass, Warn, Fail }                       // json: "pass" | "warn" | "fail"
+#[derive(Serialize)]
 pub struct CheckResult { pub name: String, pub status: Status, pub message: String }
-pub struct Report { pub results: Vec<CheckResult> }
+#[derive(Serialize)]
+pub struct Report { #[serde(rename = "checks")] pub results: Vec<CheckResult> } // json key: "checks"
 pub fn run() -> Report;   // CA cert, CA trust (cfg per OS), port forwarding, hosts per domain, daemon (IPC), leaf cert per domain
 ```
+`Report`/`CheckResult`/`Status` derive `Serialize` so `cli/doctor.rs` can emit the report as JSON.
+`cli doctor --json` prints `serde_json::to_string_pretty(&report)` — a single top-level
+`{ "checks": [ { "name", "status", "message" }, … ] }` object (mirrors `cli list --json`); without
+the flag it prints the human checklist. `DoctorArgs { json: bool }` carries the flag (see `src/cli`).
 `verify_ca_is_trusted()` cfg-gated: linux checks anchor file presence in known dirs; darwin
 `security verify-cert`; else Warn. Cert expiry via x509-parser; date format `%Y-%m-%d`.
 `check_daemon`/`check_port_forwarding` call daemon + system. The IPC + health checks are async in

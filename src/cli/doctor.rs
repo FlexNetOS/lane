@@ -4,7 +4,7 @@
 //! result as `"{icon}  {name:<22} {message}"`, where the icon is the green check,
 //! yellow warn, or red cross mark for the result's [`Status`].
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::doctor::{self, Report, Status};
 use crate::term;
@@ -12,9 +12,16 @@ use crate::term;
 /// Run the diagnostic checks and print the report.
 ///
 /// Mirrors Go's `doctorCmd.RunE`: `report := doctorRunFn(); printReport(report)`.
-pub async fn run() -> Result<()> {
+/// With `--json`, the same `Report` is serialized as JSON (mirroring
+/// `lane list --json`) instead of the human checklist.
+pub async fn run(args: &super::DoctorArgs) -> Result<()> {
     let report = doctor::run().await;
-    print_report(&report);
+    if args.json {
+        let data = serde_json::to_string_pretty(&report).context("marshaling JSON")?;
+        println!("{data}");
+    } else {
+        print_report(&report);
+    }
     Ok(())
 }
 

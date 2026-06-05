@@ -20,13 +20,15 @@ use std::path::Path;
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
+use serde::Serialize;
 
 use crate::config;
 use crate::daemon;
 use crate::system;
 
 /// Outcome of a single diagnostic check.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Status {
     /// The check succeeded.
     Pass,
@@ -37,7 +39,7 @@ pub enum Status {
 }
 
 /// A named diagnostic result with its status and a human-readable message.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct CheckResult {
     pub name: String,
     pub status: Status,
@@ -45,8 +47,12 @@ pub struct CheckResult {
 }
 
 /// The full set of diagnostic results, in slim's check order.
-#[derive(Clone, Debug, Default)]
+///
+/// Serializes as `{ "checks": [...] }` (the `results` field is renamed for the
+/// JSON key), mirroring `lane list --json`'s single top-level object.
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Report {
+    #[serde(rename = "checks")]
     pub results: Vec<CheckResult>,
 }
 
@@ -580,6 +586,39 @@ mod tests {
         let r = verify_ca_is_trusted();
         assert_eq!(r.status, Status::Fail);
         assert_eq!(r.message, "not found in system CA directories");
+    }
+
+    #[test]
+    fn report_serializes_checks_with_lowercase_status() {
+        // Locks the JSON contract host-independently: top-level `checks` key,
+        // each check exposes name/status/message, and `Status` serializes to the
+        // stable lowercase strings `pass`/`warn`/`fail`.
+        let report = Report {
+            results: vec![
+                CheckResult {
+                    name: "CA certificate".to_string(),
+                    status: Status::Pass,
+                    message: "valid".to_string(),
+                },
+                CheckResult {
+                    name: "Daemon".to_string(),
+                    status: Status::Warn,
+                    message: "not running".to_string(),
+                },
+                CheckResult {
+                    name: "Hosts".to_string(),
+                    status: Status::Fail,
+                    message: "missing".to_string(),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&report).expect("serialize report");
+        assert!(json.contains("\"checks\""), "top-level checks key: {json}");
+        assert!(json.contains("\"status\":\"pass\""), "pass status: {json}");
+        assert!(json.contains("\"status\":\"warn\""), "warn status: {json}");
+        assert!(json.contains("\"status\":\"fail\""), "fail status: {json}");
+        assert!(json.contains("\"name\":\"CA certificate\""), "name: {json}");
+        assert!(json.contains("\"message\":\"valid\""), "message: {json}");
     }
 
     // TODO(test-phase): TestCheckPortForwarding — requires mocking

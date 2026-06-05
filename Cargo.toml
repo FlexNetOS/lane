@@ -1,3 +1,8 @@
+# lane is an independent crate/repo (see meta-repo rules); declaring an empty
+# workspace table keeps it self-contained when checked out inside another
+# Cargo workspace (e.g. a worktree nested under the meta workspace root).
+[workspace]
+
 [package]
 name = "lane"
 version = "0.1.0"
