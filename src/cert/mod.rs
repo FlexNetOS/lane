@@ -35,7 +35,7 @@ use rsa::RsaPrivateKey;
 
 use crate::config;
 
-mod trust;
+pub(crate) mod trust;
 pub use trust::*;
 
 /// One hour, used for the `not_before` backdating both Go templates apply.

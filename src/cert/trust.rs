@@ -211,6 +211,20 @@ fn trimmed(output: &[u8]) -> String {
     String::from_utf8_lossy(output).trim().to_string()
 }
 
+/// The three Linux trust-store anchor paths the installer writes the lane CA
+/// to (debian / rhel / arch families). Exposed crate-wide so the `doctor`
+/// trust check verifies the installer's *actual* on-disk anchor basename
+/// (`lane.crt`) rather than the CA source file's basename — a single source of
+/// truth shared with [`linux::trust_ca`]/[`linux::untrust_ca`].
+#[cfg(target_os = "linux")]
+pub(crate) fn linux_anchor_paths() -> [&'static str; 3] {
+    [
+        linux::DEBIAN_ANCHOR_PATH,
+        linux::RHEL_ANCHOR_PATH,
+        linux::ARCH_ANCHOR_PATH,
+    ]
+}
+
 #[cfg(target_os = "linux")]
 pub fn trust_ca() -> Result<()> {
     linux::trust_ca()
