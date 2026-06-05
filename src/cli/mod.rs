@@ -26,6 +26,7 @@ mod stop;
 mod uninstall;
 mod up;
 mod upgrade;
+mod version;
 
 pub(crate) use portfwd::{ingress_ports_reachable, should_reload_port_forwarding};
 
@@ -82,7 +83,7 @@ enum Commands {
     #[command(visible_alias = "update")]
     Upgrade,
     /// Print the version
-    Version,
+    Version(VersionArgs),
 }
 
 #[derive(Args)]
@@ -144,6 +145,13 @@ pub(crate) struct DoctorArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct VersionArgs {
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
 pub(crate) struct LogsArgs {
     /// Filter by domain name
     pub name: Option<String>,
@@ -153,6 +161,12 @@ pub(crate) struct LogsArgs {
     /// Clear the access log file
     #[arg(long)]
     pub flush: bool,
+    /// Output as JSON (one NDJSON object per line)
+    #[arg(long)]
+    pub json: bool,
+    /// Show only the last N matching records
+    #[arg(short = 'n', long)]
+    pub lines: Option<i64>,
 }
 
 #[derive(Args)]
@@ -224,10 +238,7 @@ pub async fn run() -> Result<()> {
         Commands::Doctor(a) => doctor::run(&a).await,
         Commands::Uninstall => uninstall::run().await,
         Commands::Upgrade => upgrade::run().await,
-        Commands::Version => {
-            println!("lane {}", crate::VERSION);
-            Ok(())
-        }
+        Commands::Version(a) => version::run(&a).await,
     }
 }
 
