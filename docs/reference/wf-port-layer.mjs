@@ -6,7 +6,7 @@ export const meta = {
 
 // args = { layer: string, modules: [{ name, go_sources:[string], rust_files:[string], notes:string }], lane_repo?, slim_src? }
 const parsedArgs = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
-const LANE_REPO = parsedArgs.lane_repo ?? '/home/drdave/Desktop/lane'
+const LANE_REPO = parsedArgs.lane_repo ?? '.'
 const SLIM_SRC  = parsedArgs.slim_src  ?? '/home/drdave/Downloads/slim-extract/slim-main'
 const layer = parsedArgs.layer ?? 'layer'
 const modules = parsedArgs.modules ?? []

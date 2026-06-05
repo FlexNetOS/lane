@@ -39,7 +39,7 @@ strings where practical, same ordering, same edge cases).
 | Error header | `X-Slim-Error` | `X-Lane-Error` |
 | Console log prefix | `[slim]` | `[lane]` |
 | Project file | `.slim.yaml` | `.lane.yaml` |
-| Binary / upgrade repo | `kamranahmedse/slim` | `drdave-flexnetos/lane` (placeholder; set at release) |
+| Binary / upgrade repo | `kamranahmedse/slim` | `FlexNetOS/lane` |
 
 Keep ports identical: `PROXY_HTTP_PORT = 10080`, `PROXY_HTTPS_PORT = 10443`.
 
@@ -435,8 +435,8 @@ HTTP calls (auth/domain/list/upgrade) use `reqwest` async client. Browser open v
 
 ## Release artifacts (for `cli/upgrade`)
 
-`upgrade` downloads from GitHub releases of repo `drdave-flexnetos/lane` (placeholder — patched to the
-real repo at release time). Artifact names match `.github/workflows/release.yml` exactly:
+`upgrade` downloads from GitHub releases of repo `FlexNetOS/lane`. Artifact names match
+`.github/workflows/release.yml` exactly:
 `lane_{version}_{os}_{arch}.tar.gz` plus a combined `checksums.txt` (lines `"<sha256>  <file>"`).
 - `{version}` = tag without leading `v`.
 - `{os}`: map Rust `std::env::consts::OS` → `linux` stays `linux`, `macos` → `darwin`.

@@ -5,7 +5,7 @@ export const meta = {
 }
 
 const parsedArgs = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
-const LANE_REPO = parsedArgs.lane_repo ?? '/home/drdave/Desktop/lane'
+const LANE_REPO = parsedArgs.lane_repo ?? '.'
 const preamble = parsedArgs.preamble ?? ''
 const items = parsedArgs.items ?? []
 if (items.length === 0) throw new Error('fanout-write: no items provided')
