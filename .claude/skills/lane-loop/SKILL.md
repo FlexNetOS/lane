@@ -108,10 +108,21 @@ Seed `_workspace/loop_state.md` from the §template (see `references/loop-templa
    bump `cycles_this_session` and `cycles_total`, update `last_item` / `status` / `last_update`.
 8. **Commit per cycle** on the item branch, area-prefixed subject, with a `[[tasks/<slug>]]` KB
    wikilink when KB is available. Rebase onto `origin/main` before opening the item's PR so it can't
-   collide; open one PR per feature; confirm CI green.
-9. **Self-pace.** `ScheduleWakeup` to re-enter the next cycle. Use a long delay only when genuinely
-   waiting on a slow external step (e.g. CI); otherwise re-enter promptly. At the budget, hand off
-   instead of waking.
+   collide; open one PR per feature; then **arm auto-merge** instead of blocking on a CI poll:
+   ```bash
+   gh pr merge <n> --auto --merge      # lands hands-free once main's required checks pass
+   ```
+   `main` is protected with required status checks (`fmt + clippy`, `build + test (ubuntu-latest)`,
+   `build + test (macos-latest)`) and `delete_branch_on_merge`, so `--auto` waits for green, merges,
+   and deletes the branch — no human review required, no manual poll. **Still mark the item `- [x]`
+   only on a green local gate (step 6); do not mark it done merely because auto-merge is armed.** If
+   the PR can't auto-merge (e.g. the local gate was red, or required checks fail in CI), treat it as a
+   blocked item (`- [!]`) and surface it — never force-merge or weaken protection to land it.
+9. **Self-pace.** `ScheduleWakeup` to re-enter the next cycle. Because auto-merge lands the PR in the
+   background once CI is green, you usually do NOT need to wait on CI before the next item — re-enter
+   promptly and let the merge happen asynchronously. Use a long delay only when a later item genuinely
+   depends on the previous PR being merged first (then poll `gh pr view <n> --json state`). At the
+   budget, hand off instead of waking.
 
 ## Phase 3: DONE gate (terminal — only with evidence)
 
@@ -154,8 +165,10 @@ backstops; `touch _workspace/STOP` kills it. See `scripts/ralph-lane.sh` and
 1. `bash .claude/skills/lane-loop/scripts/ralph-lane.sh` (SAFE mode). No `_workspace/HANDOFF.md`, so
    the fresh agent runs DISCOVER → seeds `backlog.md` with 2 deduped intents, commits.
 2. Cycle 1: picks item 1, branches a worktree from `origin/main`, drives the crew, the cargo gate +
-   lane-verification go green, marks `- [x]`, commits, opens a PR. Cycle 2: same for item 2. At
-   `cycle_budget=3` not yet reached but the backlog is now empty.
+   lane-verification go green, marks `- [x]`, commits, opens a PR and arms `gh pr merge --auto --merge`
+   (it lands in the background once main's required checks pass, then auto-deletes its branch). Cycle 2:
+   same for item 2 — no waiting on cycle 1's CI. At `cycle_budget=3` not yet reached but the backlog is
+   now empty.
 3. Backlog has no `- [ ]` left → DONE gate runs: `cargo build && cargo build --release`, `cargo test`,
    fmt+clippy all green → writes `_workspace/DONE` with the evidence and stops. The runner sees `DONE`
    and `exit 0`. No spin past the empty backlog.
