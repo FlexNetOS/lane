@@ -437,6 +437,9 @@ Subcommands (one module each), behavior ported from the matching `cmd/*.go`:
 `start, stop, restart, up, down, list, logs, share, doctor, login, logout, domain(add/list/verify/remove), uninstall, upgrade`.
 `restart` = daemon-level bounce; reuses the `Shutdown` IPC + `run_detached`/`wait_for_daemon` (no new IPC verb, no config/hosts mutation).
 `start, stop, up, down, list, logs, share, doctor, login, logout, domain(add/list/verify/remove), uninstall, upgrade, version`.
+`completions <shell>` (lane-specific, not a Go port): emits a `clap_complete`-generated shell completion
+script (bash/zsh/fish/powershell/elvish) to stdout. Synchronous (`completions::run(&args) -> anyhow::Result<()>`,
+not awaited); raw script written to `std::io::stdout()`, bypassing `crate::term` like `version --json`.
 Helpers: `normalize_name`, `print_services`, `should_reload_port_forwarding`, `ingress_ports_reachable`.
 Flag/duration parsing: `--ttl`/`--timeout` accept Go-style durations ("30m","1h","2h","500ms") via
 `humantime::parse_duration`. `--route path=port` repeatable. `start --port` required.

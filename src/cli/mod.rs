@@ -11,6 +11,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::config::{self, Domain};
 
+mod completions;
 mod doctor;
 mod domain;
 mod down;
@@ -84,6 +85,8 @@ enum Commands {
     Upgrade,
     /// Print the version
     Version(VersionArgs),
+    /// Generate a shell completion script
+    Completions(CompletionsArgs),
 }
 
 #[derive(Args)]
@@ -189,6 +192,12 @@ pub(crate) struct ShareArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct CompletionsArgs {
+    /// Shell to generate the completion script for
+    pub shell: clap_complete::Shell,
+}
+
+#[derive(Args)]
 pub(crate) struct DomainArgs {
     #[command(subcommand)]
     pub command: DomainCommands,
@@ -239,6 +248,8 @@ pub async fn run() -> Result<()> {
         Commands::Uninstall => uninstall::run().await,
         Commands::Upgrade => upgrade::run().await,
         Commands::Version(a) => version::run(&a).await,
+        // Completion generation is synchronous (no I/O beyond stdout); don't await.
+        Commands::Completions(a) => completions::run(&a),
     }
 }
 

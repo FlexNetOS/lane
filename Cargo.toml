@@ -50,6 +50,7 @@ x509-parser = "0.16"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
