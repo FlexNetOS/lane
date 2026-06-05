@@ -1,0 +1,9 @@
+# Runtime artifacts of the lane-loop runner — NOT part of the durable on-disk state.
+# The durable state (backlog.md, loop_state.md, HANDOFF.md) IS committed; these are not.
+ralph-run-*.log
+*.log
+
+# Terminal sentinels are runtime signals for the external runner, not durable state.
+DONE
+NEEDS-HUMAN
+STOP

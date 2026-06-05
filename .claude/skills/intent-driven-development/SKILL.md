@@ -1,6 +1,6 @@
 ---
 name: intent-driven-development
-description: "Orchestrates the lane construction crew (intent-analyst, solution-architect, rust-implementer, verification-engineer, rust-native-guardian) to take a feature intent from idea to verified, Rust-native code. Use for ANY request to add a feature, upgrade, enhance, extend, or change lane, or to run the crew autonomously on a backlog/loop. Also use for follow-up: re-run, run again, continue, update, revise, refine, 'redo the X part', 'based on the previous result', 'keep going', 'next intent', 'work the backlog'. Simple questions about lane may be answered directly without the crew."
+description: "Orchestrates the lane construction crew (intent-analyst, solution-architect, rust-implementer, verification-engineer, rust-native-guardian) to take a feature intent from idea to verified, Rust-native code. Use for ANY request to add a feature, upgrade, enhance, extend, or change lane, or to run the crew autonomously on a backlog/loop within one session. Also use for follow-up: re-run, run again, continue, update, revise, refine, 'redo the X part', 'based on the previous result', 'keep going', 'next intent', 'work the backlog'. This is the IN-SESSION crew; for DURABLE, cross-session, resumable or unattended/self-restarting autonomous operation (keywords: 'resume', 'pick up the loop', 'ralph', 'run unattended across sessions until done'), use the lane-loop skill instead — it owns the loop+continuity layer and drives this crew per backlog item. Simple questions about lane may be answered directly without the crew."
 ---
 
 # Intent-Driven Development Orchestrator — Lane Construction Crew
@@ -114,6 +114,12 @@ This is the heart. **Max 3 iterations** (prevent infinite loops):
    ask whether to continue, re-scope (back to analyst/architect), or hand off.
 
 ### Phase 5: Autonomous Loop (run the crew on a backlog)
+> **Cross-session / unattended?** This phase runs the crew autonomously *within one session*. For
+> DURABLE operation that survives context resets — one item per cycle, commit-per-cycle, hand off to a
+> fresh session at a budget, cold-resume from a committed `_workspace/HANDOFF.md`, and an external
+> self-restarting `/new` runner — use the **`lane-loop`** skill. It owns the loop+continuity layer and
+> drives exactly this crew per backlog item; don't reimplement that durability here.
+
 For "be agentic / run autonomously / work the backlog / keep adding features":
 1. **Source the backlog** — read pending intents from the KB board (`git kb board`, tasks with
    `status: backlog/active`) or `_workspace/00_input/backlog.md` (one intent per line/section).
