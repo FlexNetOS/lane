@@ -73,7 +73,11 @@ pub async fn run(args: &super::LogsArgs) -> Result<()> {
             continue;
         }
 
-        println!("{}", format_log_line(line));
+        if args.json {
+            println!("{}", format_log_line_json(line));
+        } else {
+            println!("{}", format_log_line(line));
+        }
     }
 
     Ok(())
@@ -158,6 +162,44 @@ fn format_log_line(line: &str) -> String {
     )
 }
 
+/// JSON analogue of `format_log_line`: render one TAB-separated access-log line
+/// as a single compact NDJSON object. Shapes mirror `format_log_line` exactly:
+/// - 4 fields  -> minimal 4-key object
+/// - 7+ fields -> full 7-key object (first 7 fields; extras dropped)
+/// - anything else -> `{"raw": "<line>"}` (passthrough analogue)
+///
+/// All values are emitted as JSON strings (the access log stores everything as
+/// text). Output is compact (`to_string`, not `to_string_pretty`) so each record
+/// is exactly one line — required for the `--follow` NDJSON streaming contract.
+fn format_log_line_json(line: &str) -> String {
+    let parts: Vec<&str> = line.split('\t').collect();
+
+    if parts.len() == 4 {
+        return serde_json::json!({
+            "ts": parts[0],
+            "domain": parts[1],
+            "status": parts[2],
+            "duration": parts[3],
+        })
+        .to_string();
+    }
+
+    if parts.len() >= 7 {
+        return serde_json::json!({
+            "ts": parts[0],
+            "domain": parts[1],
+            "method": parts[2],
+            "path": parts[3],
+            "upstream": parts[4],
+            "status": parts[5],
+            "duration": parts[6],
+        })
+        .to_string();
+    }
+
+    serde_json::json!({ "raw": line }).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,5 +278,143 @@ mod tests {
         assert_eq!(status_style("301")("x"), term::cyan("x"));
         assert_eq!(status_style("200")("x"), term::green("x"));
         assert_eq!(status_style("")("x"), term::green("x"));
+    }
+
+    // Parse the formatter output as a JSON object map for key/value assertions.
+    fn parse_json_obj(line: &str) -> serde_json::Map<String, serde_json::Value> {
+        let value: serde_json::Value =
+            serde_json::from_str(&format_log_line_json(line)).expect("formatter emits valid JSON");
+        value
+            .as_object()
+            .expect("formatter emits a JSON object")
+            .clone()
+    }
+
+    // AC-2: a 4-field line produces exactly the 4-key minimal shape.
+    #[test]
+    fn format_log_line_json_minimal_shape() {
+        let obj = parse_json_obj("12:00:00\tmyapp.test\t200\t10ms");
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            ["domain", "duration", "status", "ts"].into_iter().collect(),
+            "expected exactly the minimal keys, got {keys:?}"
+        );
+        assert_eq!(obj["ts"], serde_json::json!("12:00:00"));
+        assert_eq!(obj["domain"], serde_json::json!("myapp.test"));
+        assert_eq!(obj["status"], serde_json::json!("200"));
+        assert_eq!(obj["duration"], serde_json::json!("10ms"));
+    }
+
+    // AC-3: a 7-field line produces exactly the 7-key full shape (no `raw`).
+    #[test]
+    fn format_log_line_json_full_shape() {
+        let obj = parse_json_obj("12:00:00\tmyapp.test\tGET\t/api/health\t3000\t200\t12ms");
+        let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            ["domain", "duration", "method", "path", "status", "ts", "upstream"]
+                .into_iter()
+                .collect(),
+            "expected exactly the full keys, got {keys:?}"
+        );
+        assert!(!obj.contains_key("raw"), "full shape must not have `raw`");
+        assert_eq!(obj["ts"], serde_json::json!("12:00:00"));
+        assert_eq!(obj["domain"], serde_json::json!("myapp.test"));
+        assert_eq!(obj["method"], serde_json::json!("GET"));
+        assert_eq!(obj["path"], serde_json::json!("/api/health"));
+        assert_eq!(obj["upstream"], serde_json::json!("3000"));
+        assert_eq!(obj["status"], serde_json::json!("200"));
+        assert_eq!(obj["duration"], serde_json::json!("12ms"));
+    }
+
+    // AC-4: an 8-field line yields the 7-key full shape, dropping the trailing field.
+    #[test]
+    fn format_log_line_json_full_drops_extra_fields() {
+        let obj = parse_json_obj("12:00:00\tmyapp.test\tGET\t/api/health\t3000\t200\t12ms\textra");
+        assert_eq!(obj.len(), 7, "expected exactly 7 keys, got {}", obj.len());
+        assert!(!obj.contains_key("raw"));
+        // Only the first 7 fields are consumed; `extra` must not appear anywhere.
+        assert_eq!(obj["duration"], serde_json::json!("12ms"));
+        for value in obj.values() {
+            assert_ne!(value, &serde_json::json!("extra"), "extra field leaked in");
+        }
+    }
+
+    // AC-5: a 1-field line passes through as `{"raw": "<line>"}`.
+    #[test]
+    fn format_log_line_json_malformed_passthrough() {
+        let obj = parse_json_obj("malformed");
+        assert_eq!(obj.len(), 1);
+        assert_eq!(obj["raw"], serde_json::json!("malformed"));
+    }
+
+    // AC-6: 5-field and 6-field lines are malformed -> `{"raw": "<line>"}`.
+    #[test]
+    fn format_log_line_json_five_and_six_fields_are_raw() {
+        let five = "a\tb\tc\td\te";
+        let obj = parse_json_obj(five);
+        assert_eq!(obj.len(), 1);
+        assert_eq!(obj["raw"], serde_json::json!(five));
+
+        let six = "a\tb\tc\td\te\tf";
+        let obj = parse_json_obj(six);
+        assert_eq!(obj.len(), 1);
+        assert_eq!(obj["raw"], serde_json::json!(six));
+    }
+
+    // AC-7: the empty string (0 fields) yields `{"raw": ""}`.
+    #[test]
+    fn format_log_line_json_empty_line_is_raw() {
+        let obj = parse_json_obj("");
+        assert_eq!(obj.len(), 1);
+        assert_eq!(obj["raw"], serde_json::json!(""));
+    }
+
+    // AC-8: numeric-looking values stay JSON strings, not numbers.
+    #[test]
+    fn format_log_line_json_values_are_strings() {
+        let minimal = format_log_line_json("12:00:00\tmyapp.test\t200\t10ms");
+        assert!(
+            minimal.contains("\"status\":\"200\""),
+            "status must be a quoted string, got {minimal:?}"
+        );
+        assert!(
+            !minimal.contains("\"status\":200"),
+            "status must not be a bare number, got {minimal:?}"
+        );
+
+        let full = format_log_line_json("12:00:00\tmyapp.test\tGET\t/api/health\t3000\t200\t12ms");
+        assert!(
+            full.contains("\"upstream\":\"3000\""),
+            "upstream must be a quoted string, got {full:?}"
+        );
+        assert!(
+            !full.contains("\"upstream\":3000"),
+            "upstream must not be a bare number, got {full:?}"
+        );
+    }
+
+    // AC-9: JSON-special characters in a value are escaped and round-trip intact.
+    #[test]
+    fn format_log_line_json_escapes_special_chars() {
+        let path = "/a\"b\\c";
+        let line = format!("12:00:00\tmyapp.test\tGET\t{path}\t3000\t200\t12ms");
+        let obj = parse_json_obj(&line);
+        assert_eq!(
+            obj["path"],
+            serde_json::json!(path),
+            "path must round-trip through serde escaping"
+        );
+    }
+
+    // AC-10: a single record is compact — no interior newline (guards pretty-print).
+    #[test]
+    fn format_log_line_json_is_compact_single_line() {
+        let out = format_log_line_json("12:00:00\tmyapp.test\tGET\t/api/health\t3000\t200\t12ms");
+        assert!(
+            !out.contains('\n'),
+            "record must contain no interior newline, got {out:?}"
+        );
     }
 }

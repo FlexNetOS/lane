@@ -150,6 +150,9 @@ pub(crate) struct LogsArgs {
     /// Clear the access log file
     #[arg(long)]
     pub flush: bool,
+    /// Output as JSON (one NDJSON object per line)
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
