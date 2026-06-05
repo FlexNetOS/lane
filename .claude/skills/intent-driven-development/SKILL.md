@@ -49,18 +49,26 @@ Decide the run mode before doing anything:
    - **Autonomous / "work the backlog" / "next intent"** → go to Phase 5 (Autonomous Loop).
 
 ### Phase 1: Preparation
-1. **Enforce the worktree mandate.** lane's CLAUDE.md requires each session's work to happen in an
-   isolated git worktree, not the primary `main` checkout. Verify in-sync and ensure a worktree:
+1. **Sync to the latest `origin/main` FIRST, then branch.** The most common waste is parallel work off
+   a stale base: two branches independently reinvent the same change (→ merge conflict or silent
+   duplicate), or a crew rebuilds a feature that landed on main while it was running. Never branch from
+   a local `main` you haven't just updated.
    ```bash
-   git fetch && git status
+   git fetch origin
+   git checkout main && git pull --ff-only origin main   # base = the real latest, not a stale local ref
    git worktree list
-   # if developing directly on the primary main checkout, create one:
-   #   meta worktree create <task-name>      (preferred, manages the whole meta workspace)
-   #   git worktree add ../.worktrees/<task-name>/lane -b <task-name>
    ```
-   Branch from `main`; never force-push `main`.
-2. Read the intent. If multiple intents were given, queue them (Phase 5).
-3. Create `_workspace/` and save the raw intent to `_workspace/00_input/intent.md`.
+2. **Enforce the worktree mandate.** lane's CLAUDE.md requires each session's work to happen in an
+   isolated git worktree branched from that fresh `main`, not the primary checkout:
+   ```bash
+   #   meta worktree create <task-name>      (preferred, manages the whole meta workspace)
+   #   git worktree add ../.worktrees/<task-name>/lane -b <task-name> origin/main
+   ```
+   Branch from the just-synced `origin/main`; never force-push `main`. If a worktree was created before
+   a newer main merged, rebase/fast-forward it onto `origin/main` before committing or opening its PR —
+   do not let it fall behind and collide.
+3. Read the intent. If multiple intents were given, queue them (Phase 5).
+4. Create `_workspace/` and save the raw intent to `_workspace/00_input/intent.md`.
 
 ### Phase 2: Team Assembly
 ```
@@ -109,6 +117,11 @@ This is the heart. **Max 3 iterations** (prevent infinite loops):
 For "be agentic / run autonomously / work the backlog / keep adding features":
 1. **Source the backlog** — read pending intents from the KB board (`git kb board`, tasks with
    `status: backlog/active`) or `_workspace/00_input/backlog.md` (one intent per line/section).
+   **Then dedup against reality before working anything:** `git fetch origin` and diff each candidate
+   intent against the current `origin/main` (and any open PRs) — drop intents whose feature already
+   exists or is in flight. A backlog proposed at session start goes stale as other sessions merge; an
+   item is only real if it isn't already on `origin/main`. Re-check at the top of each loop iteration,
+   not just once.
 2. **For each intent**, run Phases 1–4 to completion (each intent gets its own KB task and a green
    gate). Commit the result on the worktree branch with a `[[tasks/<slug>]]` wikilink in the message.
 3. **Pace the loop** with the `/loop` skill so it self-drives without burning the session:

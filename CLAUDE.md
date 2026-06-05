@@ -33,6 +33,7 @@ answered directly without the crew.
 |------|--------|--------|--------|
 | 2026-06-04 | Initial setup | All (5 agents, 6 skills) | Construction crew for intent-driven, agentic feature development |
 | 2026-06-04 | Add sub-agent fallback note | skills/intent-driven-development | Shakedown found TeamCreate/SendMessage unavailable; documented Agent-tool fallback + read-def/skill-by-path |
+| 2026-06-04 | Sync-to-latest + backlog dedup guards | skills/intent-driven-development | Parallel work off a stale base caused a duplicate Cargo.toml [workspace] and a near-miss cli/mod.rs collision; mandate fetch/pull before branching and diff backlog vs origin/main each iteration |
 
 ---
 
