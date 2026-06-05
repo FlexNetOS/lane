@@ -187,3 +187,21 @@ subcommand). `ARCHITECTURE.md` has the full signature-level contract for each.
 inside the parent `meta` workspace. It is **not** itself a meta-repo (no `.meta.yaml` here), so for
 work scoped to lane, plain `cargo`/`git` in this directory is correct. Use `meta git` / `meta exec`
 only when you intend to act across the whole multi-repo workspace.
+
+---
+
+## Harness: autonomous / resumable operation
+
+lane's harness **already runs** autonomous, resumable, self-restarting operation via the `lane-loop`
+skill (shipped): a durable on-disk backlog → one item per cycle → hand off to a fresh session at a
+cycle budget → optional fully-unattended self-restart with a clean context each cycle (the "/new"
+effect, via `.claude/skills/lane-loop/scripts/ralph-lane.sh`, `LANE_APPLY=1` to opt into unattended
+apply). Truth lives on disk (`_workspace/` backlog + checkpoints + commits), so any restart resumes
+cold with zero loss. It drives the existing crew per backlog item — it does not reimplement it.
+
+The source pattern and tailoring sheet that produced this layer (consult when evolving the harness):
+
+- Generic pattern + templates: `~/Desktop/meta/HARNESS-UPGRADE-KIT.md`
+- Tailored kit for THIS repo:  `~/Desktop/meta/harness_hub/upgrade-kits/lane.md`
+- Built on the existing crew skills: `intent-driven-development`, `lane-verification`,
+  `rust-native-guard` (don't duplicate them).
