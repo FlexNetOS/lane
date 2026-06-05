@@ -22,9 +22,9 @@ use sha2::{Digest, Sha256};
 
 use crate::term::{self, step::Step};
 
-/// The upstream release repository (`owner/name`). Patched to the real repo at
-/// release time; see ARCHITECTURE.md's release-artifacts section.
-const REPO: &str = "drdave-flexnetos/lane";
+/// The upstream release repository (`owner/name`). See ARCHITECTURE.md's
+/// release-artifacts section.
+const REPO: &str = "FlexNetOS/lane";
 
 /// Run the upgrade flow.
 pub async fn run() -> Result<()> {

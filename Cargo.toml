@@ -1,8 +1,3 @@
-# lane is an independent crate/repo (see meta-repo rules); declaring an empty
-# workspace table keeps it self-contained when checked out inside another
-# Cargo workspace (e.g. a worktree nested under the meta workspace root).
-[workspace]
-
 [package]
 name = "lane"
 version = "0.1.0"
@@ -10,12 +5,17 @@ edition = "2021"
 rust-version = "1.82"
 description = "Clean HTTPS local domains for your dev servers — myapp.test → localhost:3000"
 license = "PolyForm-Shield-1.0.0"
-repository = "https://github.com/drdave-flexnetos/lane"
-homepage = "https://github.com/drdave-flexnetos/lane"
+repository = "https://github.com/FlexNetOS/lane"
+homepage = "https://github.com/FlexNetOS/lane"
 readme = "README.md"
 keywords = ["proxy", "https", "localhost", "dns", "tunnel"]
 categories = ["command-line-utilities", "development-tools", "web-programming"]
 default-run = "lane"
+
+# lane is an independent repo (see the meta-repo rules). Declaring an empty workspace
+# table makes it a standalone Cargo workspace root, so the checkout — and any git
+# worktree placed under the parent meta tree — is not absorbed into a parent workspace.
+[workspace]
 
 [lib]
 name = "lane"
