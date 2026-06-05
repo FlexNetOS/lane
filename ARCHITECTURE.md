@@ -317,15 +317,21 @@ pub fn has_marked_entry(content: &str, hostname: &str) -> bool;
 // elevated.rs
 pub fn write_file_elevated(path: &str, content: &str) -> Result<()>; // try direct (0644); on permission -> `sudo tee`
 // portfwd.rs
+pub enum ForwardingStatus { Present, Absent, Unknown }   // three-way probe result
 pub trait PortForwarder {
     fn enable(&self) -> Result<()>;
     fn disable(&self) -> Result<()>;
     fn is_enabled(&self) -> bool;
     fn is_loaded(&self) -> bool;
     fn ensure_loaded(&self) -> Result<()>;
+    fn forwarding_status(&self) -> ForwardingStatus;     // default: Present if is_enabled else Absent
 }
 pub fn new_port_forwarder() -> Box<dyn PortForwarder>;  // cfg(linux)->LinuxPortFwd, cfg(darwin)->DarwinPortFwd, else Unsupported
 ```
+`forwarding_status` distinguishes "could not check without root" (`Unknown`) from genuinely-absent so the
+read-only `doctor` probe never escalates with sudo. Linux maps the `iptables -C` exit code:
+0->`Present`, 4 (permission denied)->`Unknown`, other non-zero / spawn error->`Absent`; `is_enabled() ==
+(forwarding_status() == Present)`.
 Linux: iptables nat chain `LANE`, REDIRECT 80->10080 & 443->10443, OUTPUT jump `-o lo`. Port all
 iptables string-matching helpers verbatim. Darwin: pf anchor `com.lane`, /etc/pf.anchors/com.lane,
 pf.conf wiring, `pfctl -E` reference token persisted at `pf_token_path()`. Port verbatim.
@@ -395,10 +401,14 @@ pub fn run() -> Report;   // CA cert, CA trust (cfg per OS), port forwarding, ho
 `cli doctor --json` prints `serde_json::to_string_pretty(&report)` — a single top-level
 `{ "checks": [ { "name", "status", "message" }, … ] }` object (mirrors `cli list --json`); without
 the flag it prints the human checklist. `DoctorArgs { json: bool }` carries the flag (see `src/cli`).
-`verify_ca_is_trusted()` cfg-gated: linux checks anchor file presence in known dirs; darwin
-`security verify-cert`; else Warn. Cert expiry via x509-parser; date format `%Y-%m-%d`.
-`check_daemon`/`check_port_forwarding` call daemon + system. The IPC + health checks are async in
-our impl; `run()` may be `async fn run() -> Report` (preferred) — CLI awaits it. Mark in cli.
+`verify_ca_is_trusted()` cfg-gated: linux checks for the installer's anchor file (basename `lane.crt`)
+at the `cert::trust::linux_anchor_paths()` locations — the single source of truth shared with the
+installer, NOT the CA source basename `rootCA.pem`; darwin `security verify-cert`; else Warn. Cert
+expiry via x509-parser; date format `%Y-%m-%d`. `check_daemon`/`check_port_forwarding` call daemon +
+system. `check_port_forwarding` maps `PortForwarder::forwarding_status()`: `Present`->Pass,
+`Absent`->Fail "not configured", `Unknown`->Warn "cannot verify without root (run: sudo lane doctor)"
+(doctor is read-only and must not trigger a sudo prompt). The IPC + health checks are async in our
+impl; `run()` may be `async fn run() -> Report` (preferred) — CLI awaits it. Mark in cli.
 
 ## src/daemon  (⇐ internal/daemon)
 

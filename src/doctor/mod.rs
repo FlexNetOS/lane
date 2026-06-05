@@ -183,12 +183,27 @@ async fn check_port_forwarding() -> CheckResult {
     let name = "Port forwarding";
     let pf = system::new_port_forwarder();
 
-    if !pf.is_enabled() {
-        return CheckResult {
-            name: name.to_string(),
-            status: Status::Warn,
-            message: "not configured".to_string(),
-        };
+    match pf.forwarding_status() {
+        // Rule confirmed absent (the probe ran with enough privilege and found
+        // it missing) -> the original "not configured" Fail.
+        system::ForwardingStatus::Absent => {
+            return CheckResult {
+                name: name.to_string(),
+                status: Status::Fail,
+                message: "not configured".to_string(),
+            };
+        }
+        // Could not determine without root. Doctor is read-only and must not
+        // trigger a sudo prompt, so warn honestly instead of a false Fail.
+        system::ForwardingStatus::Unknown => {
+            return CheckResult {
+                name: name.to_string(),
+                status: Status::Warn,
+                message: "cannot verify without root (run: sudo lane doctor)".to_string(),
+            };
+        }
+        // Present: fall through to the loaded / ingress checks below.
+        system::ForwardingStatus::Present => {}
     }
 
     if !pf.is_loaded() {
@@ -331,41 +346,50 @@ fn check_leaf_cert(domain: &str) -> CheckResult {
 // CA trust verification (⇐ trust_linux.go / trust_darwin.go / trust_unsupported.go)
 // ---------------------------------------------------------------------------
 
-/// System CA anchor directories searched on Linux.
+/// Pure decision for the Linux trust check: return the first anchor path in
+/// `paths` for which `exists` reports `true`, else `None`. Factored out so the
+/// decision is unit-testable with an injected existence predicate (no root,
+/// no real trust store).
 #[cfg(target_os = "linux")]
-const CA_DIRS: &[&str] = &[
-    "/usr/local/share/ca-certificates",
-    "/etc/pki/ca-trust/source/anchors",
-    "/etc/ca-certificates/trust-source/anchors",
-];
+fn anchor_present(paths: &[&str], exists: impl Fn(&str) -> bool) -> Option<String> {
+    paths.iter().find(|p| exists(p)).map(|p| (*p).to_string())
+}
 
-/// Linux: the CA is trusted when its anchor basename is found in one of the
-/// system CA directories.
+/// Build the `CA trust` [`CheckResult`] from the located anchor (if any). Pure,
+/// so the Pass/Fail messages can be asserted host-independently in tests.
 #[cfg(target_os = "linux")]
-fn verify_ca_is_trusted() -> CheckResult {
+fn trust_result(anchor: Option<String>) -> CheckResult {
     let name = "CA trust";
-    let ca_path = crate::cert::ca_cert_path();
-    let ca_base = ca_path
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-
-    for dir in CA_DIRS {
-        let anchor = Path::new(dir).join(&ca_base);
-        if anchor.exists() {
-            return CheckResult {
+    match anchor {
+        Some(path) => {
+            let dir = Path::new(&path)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.clone());
+            CheckResult {
                 name: name.to_string(),
                 status: Status::Pass,
                 message: format!("trusted by OS (found in {dir})"),
-            };
+            }
         }
+        None => CheckResult {
+            name: name.to_string(),
+            status: Status::Fail,
+            message: "not found in system CA directories".to_string(),
+        },
     }
+}
 
-    CheckResult {
-        name: name.to_string(),
-        status: Status::Fail,
-        message: "not found in system CA directories".to_string(),
-    }
+/// Linux: the CA is trusted when the installer's anchor file (basename
+/// `lane.crt`) is present in one of the system trust-store anchor directories.
+///
+/// The candidate paths come from [`crate::cert::trust::linux_anchor_paths`] —
+/// the same list the installer writes — so the check matches the *actual*
+/// on-disk anchor basename rather than the CA source file's `rootCA.pem`.
+#[cfg(target_os = "linux")]
+fn verify_ca_is_trusted() -> CheckResult {
+    let anchors = crate::cert::trust::linux_anchor_paths();
+    trust_result(anchor_present(&anchors, |p| Path::new(p).exists()))
 }
 
 /// macOS: the CA is trusted when `security verify-cert` exits 0.
@@ -578,14 +602,59 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     #[cfg(target_os = "linux")]
     fn verify_ca_is_trusted_not_found() {
-        let (_guard, _home) = isolated_home();
-        // The temp-home CA basename will not be present in the system CA dirs.
-        let r = verify_ca_is_trusted();
+        // When no anchor is located, the trust check Fails with the stable
+        // message. Driven through the pure `trust_result` so the assertion is
+        // host-independent (the real `verify_ca_is_trusted` reads fixed system
+        // anchor paths that may or may not exist on the test host).
+        let r = trust_result(None);
         assert_eq!(r.status, Status::Fail);
         assert_eq!(r.message, "not found in system CA directories");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn verify_ca_is_trusted_found_reports_dir() {
+        // When the debian anchor is located, Pass with the parent directory in
+        // the message — the on-disk anchor basename, never `rootCA.pem`.
+        let r = trust_result(Some(
+            "/usr/local/share/ca-certificates/lane.crt".to_string(),
+        ));
+        assert_eq!(r.status, Status::Pass);
+        assert_eq!(
+            r.message,
+            "trusted by OS (found in /usr/local/share/ca-certificates)"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn anchor_present_finds_installed_lane_anchor() {
+        // Bug #5 regression guard (Linux): the trust check must look for the
+        // installer's actual anchor (`lane.crt`), NOT the CA source basename
+        // (`rootCA.pem`).
+        let anchors = crate::cert::trust::linux_anchor_paths();
+        let debian = "/usr/local/share/ca-certificates/lane.crt";
+
+        // (a) only the debian lane.crt anchor exists -> Some(that path).
+        let got = anchor_present(&anchors, |p| p == debian);
+        assert_eq!(got.as_deref(), Some(debian));
+
+        // (b) nothing exists -> None.
+        assert_eq!(anchor_present(&anchors, |_| false), None);
+
+        // (c) the searched basenames are `lane.crt`, never `rootCA.pem`.
+        for a in anchors {
+            assert!(
+                a.ends_with("/lane.crt"),
+                "doctor must search for lane.crt, got: {a}"
+            );
+            assert!(
+                !a.ends_with("rootCA.pem"),
+                "doctor must NOT search for rootCA.pem (bug #5): {a}"
+            );
+        }
     }
 
     #[test]
