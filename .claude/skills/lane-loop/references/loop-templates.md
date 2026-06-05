@@ -64,6 +64,23 @@ cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings
 ```
 Plus: backlog clear; `lane-verification` green on every shipped item; blocked items surfaced.
 
+## PR landing (auto-merge on green)
+
+`main` is protected with required status checks; the repo has `allow_auto_merge` +
+`delete_branch_on_merge`. So each cycle's PR lands hands-free — open it, then arm:
+
+```bash
+gh pr merge <n> --auto --merge   # waits for required checks (fmt + clippy, build + test ubuntu/macos),
+                                 # merges on green, deletes the branch. No review required.
+```
+
+Don't block the loop polling CI; arm `--auto` and move to the next item. Mark the item `- [x]` only on
+a green LOCAL gate — auto-merge armed ≠ done. If required checks fail in CI, the PR stays open → treat
+it as `- [!] blocked` and surface it; never force-merge or weaken branch protection to land it.
+
+> If a CI job is ever renamed, update both the workflow and `main`'s required-check contexts in lockstep
+> — a stale required-check name blocks every PR waiting on a check that never reports.
+
 ## Repo guardrails (always in force)
 
 - **Rust-native by mandate.** No non-Rust source/build step pulled into the crate; `rust-native-guard`
