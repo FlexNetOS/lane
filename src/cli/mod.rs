@@ -72,7 +72,7 @@ enum Commands {
     /// Manage custom domains
     Domain(DomainArgs),
     /// Diagnose setup issues
-    Doctor,
+    Doctor(DoctorArgs),
     /// Remove all lane data and configuration
     Uninstall,
     /// Upgrade lane to the latest version
@@ -128,6 +128,13 @@ pub(crate) struct DownArgs {
 
 #[derive(Args)]
 pub(crate) struct ListArgs {
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct DoctorArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
@@ -210,7 +217,7 @@ pub async fn run() -> Result<()> {
         Commands::Login => login::run().await,
         Commands::Logout => logout::run().await,
         Commands::Domain(a) => domain::run(&a).await,
-        Commands::Doctor => doctor::run().await,
+        Commands::Doctor(a) => doctor::run(&a).await,
         Commands::Uninstall => uninstall::run().await,
         Commands::Upgrade => upgrade::run().await,
         Commands::Version => {
