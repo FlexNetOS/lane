@@ -19,6 +19,7 @@ mod login;
 mod logout;
 mod logs;
 mod portfwd;
+mod restart;
 mod share;
 mod start;
 mod stop;
@@ -55,6 +56,8 @@ enum Commands {
     Start(StartArgs),
     /// Stop proxying a domain, or stop everything
     Stop(StopArgs),
+    /// Restart the lane daemon
+    Restart,
     /// Start all services from .lane.yaml
     Up(UpArgs),
     /// Stop project services from .lane.yaml
@@ -223,6 +226,7 @@ pub async fn run() -> Result<()> {
     match cli.command {
         Commands::Start(a) => start::run(&a).await,
         Commands::Stop(a) => stop::run(&a).await,
+        Commands::Restart => restart::run().await,
         Commands::Up(a) => up::run(&a).await,
         Commands::Down(a) => down::run(&a).await,
         Commands::List(a) => list::run(&a).await,

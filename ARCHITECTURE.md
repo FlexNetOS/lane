@@ -434,6 +434,8 @@ SIGINT/SIGTERM handler (tokio::signal) -> graceful shutdown, run server.
 Top-level: on error print `\nError: {e}` to stderr (red "Error:") and exit 1. `version` prints `lane {VERSION}`; `version --json` prints a pretty `{"name","version"}` object (mirrors `list`/`doctor` `--json`).
 `Version` const in `root.rs` (set from build; default "0.1.0"; overridable via `LANE_VERSION` build env or `clap` `version` attr).
 Subcommands (one module each), behavior ported from the matching `cmd/*.go`:
+`start, stop, restart, up, down, list, logs, share, doctor, login, logout, domain(add/list/verify/remove), uninstall, upgrade`.
+`restart` = daemon-level bounce; reuses the `Shutdown` IPC + `run_detached`/`wait_for_daemon` (no new IPC verb, no config/hosts mutation).
 `start, stop, up, down, list, logs, share, doctor, login, logout, domain(add/list/verify/remove), uninstall, upgrade, version`.
 Helpers: `normalize_name`, `print_services`, `should_reload_port_forwarding`, `ingress_ports_reachable`.
 Flag/duration parsing: `--ttl`/`--timeout` accept Go-style durations ("30m","1h","2h","500ms") via
