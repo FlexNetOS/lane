@@ -6,7 +6,7 @@ export const meta = {
 
 // args = { topics: [...], lane_repo?, slim_src? }
 const parsedArgs = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
-const LANE_REPO = parsedArgs.lane_repo ?? '/home/drdave/Desktop/lane'
+const LANE_REPO = parsedArgs.lane_repo ?? '.'
 const SLIM_SRC  = parsedArgs.slim_src  ?? '/home/drdave/Downloads/slim-extract/slim-main'
 const topics = parsedArgs.topics ?? []
 if (topics.length === 0) throw new Error('reference-playbooks: no topics provided')
