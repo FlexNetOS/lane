@@ -153,6 +153,9 @@ pub(crate) struct LogsArgs {
     /// Output as JSON (one NDJSON object per line)
     #[arg(long)]
     pub json: bool,
+    /// Show only the last N matching records
+    #[arg(short = 'n', long)]
+    pub lines: Option<i64>,
 }
 
 #[derive(Args)]
