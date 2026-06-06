@@ -211,7 +211,11 @@ pub(crate) enum DomainCommands {
         domain: String,
     },
     /// List custom domains
-    List,
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Verify DNS for a custom domain
     Verify {
         /// Domain to verify
