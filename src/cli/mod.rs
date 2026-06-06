@@ -209,6 +209,9 @@ pub(crate) enum DomainCommands {
     Add {
         /// Domain to add (e.g. myapp.example.com)
         domain: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// List custom domains
     List {

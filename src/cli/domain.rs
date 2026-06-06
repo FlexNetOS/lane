@@ -40,7 +40,7 @@ struct DomainEntry {
 /// Run the `domain` command, dispatching on the subcommand.
 pub async fn run(args: &DomainArgs) -> Result<()> {
     match &args.command {
-        DomainCommands::Add { domain } => add(domain).await,
+        DomainCommands::Add { domain, json } => add(domain, *json).await,
         DomainCommands::List { json } => list(*json).await,
         DomainCommands::Verify { domain, json } => verify(domain, *json).await,
         DomainCommands::Remove { domain } => remove(domain).await,
@@ -50,10 +50,30 @@ pub async fn run(args: &DomainArgs) -> Result<()> {
 // --- subcommands -----------------------------------------------------------
 
 /// `lane domain add <domain>`.
-async fn add(domain: &str) -> Result<()> {
+async fn add(domain: &str, json: bool) -> Result<()> {
     let info = auth::require()?;
     let token = info.token;
     let domain = domain.to_string();
+
+    // `--json` skips the spinner + DNS-record block and emits the record as data
+    // so scripts can create it programmatically. A failure to add is a hard error
+    // (non-zero exit) — there is no record to emit — unlike `verify --json`, where
+    // "not verified yet" is a normal `{verified:false}` outcome.
+    if json {
+        let target_ip = do_add(&token, &domain).await?;
+        let payload = AddJson {
+            dns: DnsRecord {
+                record_type: "A".to_string(),
+                name: domain.clone(),
+                value: target_ip.clone(),
+            },
+            domain: domain.clone(),
+            target_ip,
+        };
+        let data = serde_json::to_string_pretty(&payload).context("marshaling JSON")?;
+        println!("{data}");
+        return Ok(());
+    }
 
     // Shared slot for the step closure to write the resolved target IP into,
     // mirroring Go's captured `var targetIP string`.
@@ -68,36 +88,8 @@ async fn add(domain: &str) -> Result<()> {
         interactive: false,
         run: Box::new(move || {
             block_on(async move {
-                let body = serde_json::to_vec(&json!({ "domain": step_domain }))
-                    .map_err(|e| anyhow!("encoding request: {e}"))?;
-
-                let client = http_client(Duration::from_secs(10))?;
-                let resp = client
-                    .post(format!("{}/api/domains", config::api_base_url()))
-                    .header("Authorization", format!("Bearer {step_token}"))
-                    .header("Content-Type", "application/json")
-                    .body(body)
-                    .send()
-                    .await
-                    .map_err(|e| anyhow!("adding domain: {e}"))?;
-
-                let status = resp.status().as_u16();
-                if status != 200 && status != 201 {
-                    return Err(api_error(resp, "failed to add domain").await);
-                }
-
-                #[derive(Default, Deserialize)]
-                struct AddResult {
-                    #[serde(default)]
-                    target_ip: String,
-                }
-                let result: AddResult = resp
-                    .json()
-                    .await
-                    .map_err(|e| anyhow!("decoding response: {e}"))?;
-
-                *step_target.lock().unwrap() = result.target_ip;
-
+                let ip = do_add(&step_token, &step_domain).await?;
+                *step_target.lock().unwrap() = ip;
                 Ok("done".to_string())
             })
         }),
@@ -123,6 +115,57 @@ async fn add(domain: &str) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Structured result of `lane domain add --json`.
+#[derive(Serialize)]
+struct AddJson {
+    domain: String,
+    target_ip: String,
+    dns: DnsRecord,
+}
+
+/// The DNS A record the user must create to verify ownership.
+#[derive(Serialize)]
+struct DnsRecord {
+    #[serde(rename = "type")]
+    record_type: String,
+    name: String,
+    value: String,
+}
+
+/// POST the domain to the API and return the resolved target IP. Mirrors the Go
+/// add flow; non-2xx responses surface via [`api_error`].
+async fn do_add(token: &str, domain: &str) -> Result<String> {
+    let body = serde_json::to_vec(&json!({ "domain": domain }))
+        .map_err(|e| anyhow!("encoding request: {e}"))?;
+
+    let client = http_client(Duration::from_secs(10))?;
+    let resp = client
+        .post(format!("{}/api/domains", config::api_base_url()))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| anyhow!("adding domain: {e}"))?;
+
+    let status = resp.status().as_u16();
+    if status != 200 && status != 201 {
+        return Err(api_error(resp, "failed to add domain").await);
+    }
+
+    #[derive(Default, Deserialize)]
+    struct AddResult {
+        #[serde(default)]
+        target_ip: String,
+    }
+    let result: AddResult = resp
+        .json()
+        .await
+        .map_err(|e| anyhow!("decoding response: {e}"))?;
+
+    Ok(result.target_ip)
 }
 
 /// `lane domain list`.
@@ -529,6 +572,28 @@ mod tests {
         assert!(json.contains("\"domain\":\"app.example.com\""));
         assert!(json.contains("\"status\":\"active\""));
         assert!(json.contains("\"created_at\":\"2024-01-01T00:00:00Z\""));
+    }
+
+    #[test]
+    fn add_json_shape_has_renamed_type_field() {
+        let payload = AddJson {
+            domain: "app.test".into(),
+            target_ip: "203.0.113.7".into(),
+            dns: DnsRecord {
+                record_type: "A".into(),
+                name: "app.test".into(),
+                value: "203.0.113.7".into(),
+            },
+        };
+        let json = serde_json::to_string(&payload).expect("serialize");
+        assert!(json.contains("\"domain\":\"app.test\""));
+        assert!(json.contains("\"target_ip\":\"203.0.113.7\""));
+        // DNS record nests with a `type` key (serde rename of record_type).
+        assert!(json.contains("\"dns\":{"));
+        assert!(json.contains("\"type\":\"A\""));
+        assert!(json.contains("\"name\":\"app.test\""));
+        assert!(json.contains("\"value\":\"203.0.113.7\""));
+        assert!(!json.contains("record_type"));
     }
 
     #[test]
