@@ -120,6 +120,9 @@ pub(crate) struct StartArgs {
 pub(crate) struct StopArgs {
     /// Domain to stop (omit to stop everything)
     pub name: Option<String>,
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
