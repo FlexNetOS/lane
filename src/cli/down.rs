@@ -28,16 +28,34 @@ pub async fn run(args: &super::DownArgs) -> Result<()> {
 
     let remaining_domains = remove_project_domains(&pc)?;
 
+    // In --json mode, host-removal warnings are collected into the payload rather
+    // than printed, so stdout carries only the JSON object.
+    let mut warnings: Vec<String> = Vec::new();
     for svc in &pc.services {
         if let Err(e) = system::remove_host(&svc.domain) {
-            println!(
-                "Warning: failed to remove {} from /etc/hosts: {}",
-                svc.domain, e
-            );
+            if args.json {
+                warnings.push(format!(
+                    "failed to remove {} from /etc/hosts: {e}",
+                    svc.domain
+                ));
+            } else {
+                println!(
+                    "Warning: failed to remove {} from /etc/hosts: {}",
+                    svc.domain, e
+                );
+            }
         }
     }
 
-    if daemon::is_running().await {
+    let daemon_running = daemon::is_running().await;
+    let daemon_state = if !daemon_running {
+        "not_running"
+    } else if remaining_domains == 0 {
+        "stopped"
+    } else {
+        "reloaded"
+    };
+    if daemon_running {
         let msg_type = down_ipc_type(remaining_domains);
         let context = if remaining_domains == 0 {
             "stopping daemon"
@@ -52,8 +70,36 @@ pub async fn run(args: &super::DownArgs) -> Result<()> {
         .context(context)?;
     }
 
-    println!("Stopped {} project service(s).", pc.services.len());
+    if args.json {
+        let stopped: Vec<String> = pc.services.iter().map(|s| s.domain.clone()).collect();
+        let payload = down_json_payload(&stopped, remaining_domains, daemon_state, &warnings);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).context("marshaling JSON")?
+        );
+    } else {
+        println!("Stopped {} project service(s).", pc.services.len());
+    }
     Ok(())
+}
+
+/// Build the `lane down --json` payload: the domains torn down, how many remain
+/// configured, the resulting daemon state, and any non-fatal warnings.
+fn down_json_payload(
+    stopped: &[String],
+    remaining: usize,
+    daemon: &str,
+    warnings: &[String],
+) -> serde_json::Value {
+    let mut v = serde_json::json!({
+        "stopped": stopped,
+        "remaining": remaining,
+        "daemon": daemon,
+    });
+    if !warnings.is_empty() {
+        v["warnings"] = serde_json::json!(warnings);
+    }
+    v
 }
 
 /// Remove every domain named by the project's services from the global config
@@ -103,6 +149,27 @@ mod tests {
             ..Default::default()
         };
         cfg.save().expect("seed save");
+    }
+
+    // `lane down --json` payload: lists stopped domains, remaining count, daemon
+    // state; `warnings` is omitted when there are none and present otherwise.
+    #[test]
+    fn down_json_payload_shape() {
+        let v = down_json_payload(
+            &["myapp.test".to_string(), "api.test".to_string()],
+            1,
+            "reloaded",
+            &[],
+        );
+        assert_eq!(v["stopped"].as_array().unwrap().len(), 2);
+        assert_eq!(v["stopped"][0], "myapp.test");
+        assert_eq!(v["remaining"], 1);
+        assert_eq!(v["daemon"], "reloaded");
+        assert!(v.get("warnings").is_none(), "warnings omitted when empty");
+
+        let v2 = down_json_payload(&[], 0, "stopped", &["boom".to_string()]);
+        assert_eq!(v2["daemon"], "stopped");
+        assert_eq!(v2["warnings"][0], "boom");
     }
 
     // Port of TestDownRemovesProjectServices — only project domains are removed;
