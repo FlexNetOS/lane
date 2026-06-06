@@ -15,7 +15,7 @@ Legend: [ ] todo · [x] done+verified · [!] blocked: <reason>
 - [x] (stretch) `lane logs --follow`/`-f` — ALREADY SHIPPED (dedup-drop). `LogsArgs.follow` exists (src/cli/mod.rs:166); logs.rs already tails like `tail -f` and honors `--json` (NDJSON) in both the tail and stream loops. No work needed.
 
 ## Batch 4 (re-DISCOVER 2026-06-05 — programmatic URL capture for automation; NOT churn — scripts need the URL)
-- [ ] Add `--json` to `lane start` — after mapping, emit `{domain, port, url, routes?}` so scripts capture the `https://<domain>` URL without scraping. Human output unchanged without the flag. (start.rs + StartArgs)
+- [x] Add `--json` to `lane start` — emit `{domain, port, url, routes?}`; --wait progress → stderr so stdout is pure JSON. — PR #21, green local gate (220 tests +1, clippy/fmt clean, `--json` in help, Rust-native). Auto-merge ARMED.
 - [ ] Add `--json` to `lane share` — emit `{url, port, ...}` for the created tunnel; the public URL is the key automation value (capture it in CI). Human output unchanged without the flag. (share.rs + ShareArgs)
 - [ ] Add `--json` to `lane stop` — emit `{stopped:[domain…], daemon}` for symmetry with up/down/start. Human output unchanged without the flag. (stop.rs + StopArgs)
 
