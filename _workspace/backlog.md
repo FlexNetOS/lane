@@ -1,16 +1,23 @@
 # lane backlog
 Legend: [ ] todo · [x] done+verified · [!] blocked: <reason>
 
-- [x] Add `lane completions <shell>` subcommand (bash/zsh/fish/powershell) emitting a shell completion script via clap_complete; fully verifiable in an isolated HOME with no privilege. — PR #13, green local gate (206 tests, clippy clean, behavior verified live, guard PASS). Auto-merge NOT armed: SAFE-mode session (no LANE_APPLY opt-in) → awaiting human merge.
-- [x] Fix `lane doctor` false-negative CA-trust + port-forwarding probes (FlexNetOS/lane#5): trust check looks for basename `rootCA.pem` but the installer writes `lane.crt` (cert/trust.rs); `portfwd` `is_enabled()` runs `iptables -t nat -C` without privilege (portfwd.rs) so exit-4 perm-denied reads as "not configured". Both report ✗ while the layer actually works. — PR #14, green local gate (208 tests, clippy clean, guard PASS). VERIFIED LIVE against #5's exact condition on this host: doctor now shows ✓ CA trust + ! "cannot verify without root" (Warn, no sudo prompt), was ✗/✗. The anticipated sudo "human wall" was AVOIDED by design — the diagnostic reports Warn instead of escalating, so no privileged verify was needed. Auto-merge NOT armed: SAFE-mode session (no LANE_APPLY) → awaiting human merge.
+- [ ] Add `--json` to `lane domain list` — emit a stable machine-readable array of custom domains (parity with `lane list --json`), pretty-printed, deserializable; human table unchanged without the flag. Fully verifiable in an isolated HOME, no privilege.
+- [ ] Make doctor `run()` an `async fn run() -> Report` per ARCHITECTURE.md:411 `(preferred)` note ("Mark in cli") — the IPC + health checks are already async; collapse the internal block_on/bridge, CLI awaits it. Behavior-preserving refactor; proven by unchanged doctor output + green tests.
+- [ ] Add `--json` to `lane domain verify <domain>` — emit `{domain, verified, error?}` for CI/scripting; the arg-parse + error-JSON-shape paths are unit-testable without network. Human output unchanged without the flag.
 
 <!--
-DISCOVER baseline (cycle seed, 2026-06-05): branched from origin/main @ b8636e3, tree clean,
-no open PRs, only the primary worktree. Recently shipped (do NOT re-propose): doctor --json (#3),
-logs --json (#6), logs -n/--lines (#7), version --json (#8), restart (#9), harness loop upgrade
-(#10/#11/#12). The prior "completions (feat-completions worktree)" pointer has NO surviving
-branch/worktree/PR — treated as unclaimed and re-seeded above. slim Go reference NOT present
-locally (/home/drdave/Downloads/slim-extract/slim-main absent), so completions is a standard CLI
-enhancement rather than a confirmed Go-parity port. Re-dedup against origin/main + open PRs at the
-top of EACH cycle.
+DISCOVER baseline (re-seed, 2026-06-05, fresh session after prior backlog cleared+merged):
+branched from origin/main @ 8209c86 (local main = 8209c86 + unpushed _workspace bookkeeping).
+Tree clean. NO open PRs, NO open issues, NO claimed worktrees (pruned the two stale already-merged
+ones: feat-completions, fix-doctor-probes). lane is at full slim command parity
+(docs/comparison-with-slim.md), so backlog = enhancements + ARCHITECTURE (preferred)/TODO notes,
+matching the shipped pattern. Recently shipped (do NOT re-propose): doctor --json (#3), logs --json
+(#6), logs -n/--lines (#7), version --json (#8), restart (#9), completions (#13), doctor#5 probe
+fix (#14). `lane list --json` already exists; `domain list`/`domain verify` lack --json (gap).
+
+POLICY (this session, no-human-in-loop): every cycle MUST open a PR and arm `gh pr merge --auto
+--merge`. main is protected with required checks (fmt+clippy, build+test ubuntu, build+test macos)
++ delete_branch_on_merge, so --auto lands it hands-free on green — NO "await human merge", NO
+premature DONE. Leaving PRs uncreated/open is what caused cross-session conflicts; do not repeat it.
+Re-dedup against origin/main + open PRs at the top of EACH cycle.
 -->
