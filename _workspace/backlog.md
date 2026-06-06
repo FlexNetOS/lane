@@ -2,7 +2,7 @@
 Legend: [ ] todo · [x] done+verified · [!] blocked: <reason>
 
 - [x] Add `--json` to `lane domain list` — emit a stable machine-readable array of custom domains (parity with `lane list --json`), pretty-printed, deserializable; human table unchanged without the flag. — PR #15, green local gate (212 tests +2, clippy clean, fmt clean, `--json` in help, Rust-native only-.rs). Auto-merge ARMED (`gh pr merge 15 --auto --merge`) → lands hands-free on green CI.
-- [ ] Make doctor `run()` an `async fn run() -> Report` per ARCHITECTURE.md:411 `(preferred)` note ("Mark in cli") — the IPC + health checks are already async; collapse the internal block_on/bridge, CLI awaits it. Behavior-preserving refactor; proven by unchanged doctor output + green tests.
+- [x] Make doctor `run()` an `async fn run() -> Report` per ARCHITECTURE.md:411 `(preferred)` note. — ALREADY SHIPPED (dedup-drop, no PR). Top-of-cycle dedup found `doctor::run()` is already `pub async fn run() -> Report` (src/doctor/mod.rs:66), `cli/doctor.rs` already `doctor::run().await`, and there is NO block_on/Handle bridge to collapse. Satisfied by the earlier doctor --json work (#3). No fabricated no-op change.
 - [ ] Add `--json` to `lane domain verify <domain>` — emit `{domain, verified, error?}` for CI/scripting; the arg-parse + error-JSON-shape paths are unit-testable without network. Human output unchanged without the flag.
 
 <!--
