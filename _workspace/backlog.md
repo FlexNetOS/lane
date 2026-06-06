@@ -10,7 +10,7 @@ Legend: [ ] todo · [x] done+verified · [!] blocked: <reason>
 - [x] Add `--json` to `lane domain remove <domain>` — emit `{domain, removed, error?}`; un-forced 409 → `{removed:false,error}` (no prompt). — PR #18 MERGED, green local gate (217 tests +1, clippy/fmt clean, `--json` in help, Rust-native). Completes domain-subcommand JSON coverage (#15/#16/#17/#18 all MERGED).
 
 ## Batch 3 (re-DISCOVER 2026-06-05 — scriptable project orchestration; independent of domain.rs)
-- [ ] Add `--json` to `lane up` — after starting services from `.lane.yaml`, emit `{started:[{domain,port,routes?}], skipped?:[…]}` so CI can assert what came up without scraping the table. Human output unchanged without the flag. Verifiable in isolated HOME against a temp `.lane.yaml`.
+- [x] Add `--json` to `lane up` — emit `{config, started:[{name,port,routes?}]}`. — PR #19, green local gate (218 tests +1, clippy/fmt clean, `--json` in help, Rust-native). Auto-merge ARMED.
 - [ ] Add `--json` to `lane down` — emit `{stopped:[domain,…]}` for the services torn down from `.lane.yaml`. Human output unchanged without the flag.
 - [ ] (stretch) `lane logs --follow`/`-f` — stream new access-log records (tail -f) until interrupted; needs daemon-side streaming, scope with intent-to-spec before building.
 
