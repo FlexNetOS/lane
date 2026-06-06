@@ -17,7 +17,10 @@ Legend: [ ] todo · [x] done+verified · [!] blocked: <reason>
 ## Batch 4 (re-DISCOVER 2026-06-05 — programmatic URL capture for automation; NOT churn — scripts need the URL)
 - [x] Add `--json` to `lane start` — emit `{domain, port, url, routes?}`; --wait progress → stderr so stdout is pure JSON. — PR #21, green local gate (220 tests +1, clippy/fmt clean, `--json` in help, Rust-native). Auto-merge ARMED.
 - [x] Add `--json` to `lane share` — NDJSON event stream (connected{url,…}/request*/disconnected, error for Pro path). — PR #22, green local gate (222 tests +2, clippy/fmt clean, `--json` in help, Rust-native). Auto-merge ARMED.
-- [ ] Add `--json` to `lane stop` — emit `{stopped:[domain…], daemon}` for symmetry with up/down/start. Human output unchanged without the flag. (stop.rs + StopArgs)
+- [x] Add `--json` to `lane stop` — emit `{stopped:[domain…], daemon, warnings?}`. — PR #23, green local gate (223 tests +1, clippy/fmt clean, `--json` in help, Rust-native). Auto-merge ARMED.
+
+## Batch 5 (DEEPER re-DISCOVER 2026-06-05 — docs sync; the --json surface grew but docs lag)
+- [ ] Document `--json` across `docs/commands.md` — the flag now exists on domain list/verify/add/remove, up, down, start, share, stop (+ earlier doctor/logs/version) but only `lane list` is documented. Add a `--json` note to each section with its payload shape. Docs-only; verify by re-grepping. (rust-native: .md only, no product drift.)
 
 NOTE: --json read/orchestration coverage is otherwise COMPLETE (list/doctor/logs/version/domain×4/up/down). lane is at full slim parity (PRD all 12 goals shipped), no code TODOs, the one ARCHITECTURE `(preferred)` note (doctor-async) already satisfied. After Batch 4, re-DISCOVER must mine DEEPER (test gaps, docs accuracy, edge cases) or run the DONE gate — do NOT churn --json onto action commands beyond start/share/stop.
 
