@@ -1,16 +1,16 @@
 # Loop state — lane-loop
 session_started: 2026-06-05 (UTC date; scripts can't read the clock)
 loop: lane-loop
-branch: (between cycles — next: domain-add-json, after #16 merges)
+branch: (between cycles — next: lane up --json, Batch 3)
 worktree: (none active)
 cycle_budget: 3            # completed cycles per session before handoff (override via RALPH_BUDGET)
-cycles_this_session: 3     # cycle1=domain list --json (#15 MERGED), cycle2=doctor async (dedup-drop), cycle3=domain verify --json (#16 auto-merge armed)
-cycles_total: 5            # carried across sessions
-last_item: Batch-1 CLEARED — #15 MERGED, doctor-async already-shipped (dedup), #16 open auto-merge armed. Batch-2 re-DISCOVERED (domain add/remove --json).
-status: ACTIVE, self-pacing. Batch 1 done (3/3). Re-DISCOVERED Batch 2: domain add/remove --json
-        (completes domain-subcommand JSON coverage). Batch 2 touches domain.rs (same file as #16),
-        so the next cycle MUST branch from a main that has #16 merged — self-paced a ScheduleWakeup
-        to continue once #16 auto-merges (poll `gh pr view 16 --json state`). At cycle_budget (3) for
-        this session: next session continues Batch 2. NO premature DONE; loop stays alive via the
-        durable backlog. NO-HUMAN-IN-LOOP: every cycle opens a PR + arms auto-merge.
+cycles_this_session: 5     # past budget → HAND OFF. c1 domain list (#15), c2 doctor-async dedup, c3 verify (#16), c4 add (#17), c5 remove (#18)
+cycles_total: 7            # carried across sessions
+last_item: Batch 2 CLEARED — all 4 domain subcommands have --json (#15/#16/#17/#18 ALL MERGED). Batch 3 re-DISCOVERED (lane up/down --json).
+status: HANDOFF. Five productive cycles this session, all PRs auto-merged hands-free on green CI
+        (#15 list, #16 verify, #17 add, #18 remove --json; doctor-async was a dedup-drop). main is
+        clean and integrated (rebased onto origin/main after each merge). Past cycle_budget(3) →
+        handing off so a FRESH session resumes cold and continues Batch 3 (lane up --json first).
+        NO premature DONE — backlog has live Batch-3 items. NO-HUMAN-IN-LOOP confirmed working:
+        every cycle opened a PR + armed auto-merge; nothing left "awaiting human merge".
 last_update: 2026-06-05

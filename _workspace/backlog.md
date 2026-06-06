@@ -7,7 +7,12 @@ Legend: [ ] todo · [x] done+verified · [!] blocked: <reason>
 
 ## Batch 2 (re-DISCOVER 2026-06-05 — complete domain-subcommand JSON coverage; depends on #16 merging since same file `domain.rs`)
 - [x] Add `--json` to `lane domain add <domain>` — emit `{domain, target_ip, dns:{type,name,value}}`. — PR #17, green local gate (216 tests +1, clippy/fmt clean, `--json` in help, Rust-native). Auto-merge ARMED.
-- [ ] Add `--json` to `lane domain remove <domain>` — emit `{domain, removed: bool, error?}`; the 409 "active tunnel" interactive confirm path stays human-only (in --json mode, treat an un-forced 409 as `{removed:false, error}` rather than prompting). Human output unchanged without the flag.
+- [x] Add `--json` to `lane domain remove <domain>` — emit `{domain, removed, error?}`; un-forced 409 → `{removed:false,error}` (no prompt). — PR #18 MERGED, green local gate (217 tests +1, clippy/fmt clean, `--json` in help, Rust-native). Completes domain-subcommand JSON coverage (#15/#16/#17/#18 all MERGED).
+
+## Batch 3 (re-DISCOVER 2026-06-05 — scriptable project orchestration; independent of domain.rs)
+- [ ] Add `--json` to `lane up` — after starting services from `.lane.yaml`, emit `{started:[{domain,port,routes?}], skipped?:[…]}` so CI can assert what came up without scraping the table. Human output unchanged without the flag. Verifiable in isolated HOME against a temp `.lane.yaml`.
+- [ ] Add `--json` to `lane down` — emit `{stopped:[domain,…]}` for the services torn down from `.lane.yaml`. Human output unchanged without the flag.
+- [ ] (stretch) `lane logs --follow`/`-f` — stream new access-log records (tail -f) until interrupted; needs daemon-side streaming, scope with intent-to-spec before building.
 
 <!--
 DISCOVER baseline (re-seed, 2026-06-05, fresh session after prior backlog cleared+merged):
