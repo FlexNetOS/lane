@@ -111,6 +111,9 @@ pub(crate) struct StartArgs {
     /// Maximum time to wait for upstream with --wait (e.g. 30s, 2m)
     #[arg(long, value_parser = parse_duration)]
     pub timeout: Option<Duration>,
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]

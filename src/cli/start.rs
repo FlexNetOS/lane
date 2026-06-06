@@ -88,27 +88,67 @@ pub async fn run(args: &super::StartArgs) -> Result<()> {
             wait_ports.push(r.port);
         }
         for p in wait_ports {
-            print!(
-                "Waiting for localhost:{p} (timeout {})... ",
-                humantime::format_duration(timeout)
-            );
-            // Flush so the in-progress line shows before the upstream probe.
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
+            // In --json mode the wait progress goes to stderr so stdout stays
+            // pure JSON; the human path keeps printing to stdout as before.
+            if args.json {
+                eprint!(
+                    "Waiting for localhost:{p} (timeout {})... ",
+                    humantime::format_duration(timeout)
+                );
+            } else {
+                print!(
+                    "Waiting for localhost:{p} (timeout {})... ",
+                    humantime::format_duration(timeout)
+                );
+                // Flush so the in-progress line shows before the upstream probe.
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            }
             if let Err(e) = proxy::wait_for_upstream(p, timeout).await {
-                println!("timed out");
+                if args.json {
+                    eprintln!("timed out");
+                } else {
+                    println!("timed out");
+                }
                 return Err(e);
             }
-            println!("ready");
+            if args.json {
+                eprintln!("ready");
+            } else {
+                println!("ready");
+            }
         }
     }
 
-    super::print_services(&[Domain {
+    let domain = Domain {
         name,
         port: args.port,
         routes,
-    }]);
+    };
+    if args.json {
+        let payload = start_json_payload(&domain);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).context("marshaling JSON")?
+        );
+    } else {
+        super::print_services(std::slice::from_ref(&domain));
+    }
     Ok(())
+}
+
+/// Build the `lane start --json` payload: the mapped domain, its port, the
+/// resulting `https://<domain>` URL, and any path routes (omitted when empty).
+fn start_json_payload(domain: &Domain) -> serde_json::Value {
+    let mut v = serde_json::json!({
+        "domain": domain.name,
+        "port": domain.port,
+        "url": format!("https://{}", domain.name),
+    });
+    if !domain.routes.is_empty() {
+        v["routes"] = serde_json::json!(domain.routes);
+    }
+    v
 }
 
 /// Validate the `--wait`/`--timeout` flag combination and resolve the effective
@@ -132,6 +172,35 @@ fn validate_start_wait_flags(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `lane start --json` payload exposes the mapped URL for scripting; routes
+    // are nested when present and omitted when empty.
+    #[test]
+    fn start_json_payload_exposes_url_and_routes() {
+        use crate::config::Route;
+
+        let bare = start_json_payload(&Domain {
+            name: "myapp.test".into(),
+            port: 3000,
+            routes: vec![],
+        });
+        assert_eq!(bare["domain"], "myapp.test");
+        assert_eq!(bare["port"], 3000);
+        assert_eq!(bare["url"], "https://myapp.test");
+        assert!(bare.get("routes").is_none(), "routes omitted when empty");
+
+        let routed = start_json_payload(&Domain {
+            name: "api.test".into(),
+            port: 8080,
+            routes: vec![Route {
+                path: "/v1".into(),
+                port: 9000,
+            }],
+        });
+        assert_eq!(routed["url"], "https://api.test");
+        assert_eq!(routed["routes"][0]["path"], "/v1");
+        assert_eq!(routed["routes"][0]["port"], 9000);
+    }
 
     // Port of TestValidateStartWaitFlags.
     #[test]
