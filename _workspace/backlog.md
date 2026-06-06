@@ -11,8 +11,15 @@ Legend: [ ] todo · [x] done+verified · [!] blocked: <reason>
 
 ## Batch 3 (re-DISCOVER 2026-06-05 — scriptable project orchestration; independent of domain.rs)
 - [x] Add `--json` to `lane up` — emit `{config, started:[{name,port,routes?}]}`. — PR #19, green local gate (218 tests +1, clippy/fmt clean, `--json` in help, Rust-native). Auto-merge ARMED.
-- [ ] Add `--json` to `lane down` — emit `{stopped:[domain,…]}` for the services torn down from `.lane.yaml`. Human output unchanged without the flag.
-- [ ] (stretch) `lane logs --follow`/`-f` — stream new access-log records (tail -f) until interrupted; needs daemon-side streaming, scope with intent-to-spec before building.
+- [x] Add `--json` to `lane down` — emit `{stopped:[domain…], remaining, daemon, warnings?}`. — PR #20, green local gate (219 tests +1, clippy/fmt clean, `--json` in help, Rust-native). Auto-merge ARMED.
+- [x] (stretch) `lane logs --follow`/`-f` — ALREADY SHIPPED (dedup-drop). `LogsArgs.follow` exists (src/cli/mod.rs:166); logs.rs already tails like `tail -f` and honors `--json` (NDJSON) in both the tail and stream loops. No work needed.
+
+## Batch 4 (re-DISCOVER 2026-06-05 — programmatic URL capture for automation; NOT churn — scripts need the URL)
+- [ ] Add `--json` to `lane start` — after mapping, emit `{domain, port, url, routes?}` so scripts capture the `https://<domain>` URL without scraping. Human output unchanged without the flag. (start.rs + StartArgs)
+- [ ] Add `--json` to `lane share` — emit `{url, port, ...}` for the created tunnel; the public URL is the key automation value (capture it in CI). Human output unchanged without the flag. (share.rs + ShareArgs)
+- [ ] Add `--json` to `lane stop` — emit `{stopped:[domain…], daemon}` for symmetry with up/down/start. Human output unchanged without the flag. (stop.rs + StopArgs)
+
+NOTE: --json read/orchestration coverage is otherwise COMPLETE (list/doctor/logs/version/domain×4/up/down). lane is at full slim parity (PRD all 12 goals shipped), no code TODOs, the one ARCHITECTURE `(preferred)` note (doctor-async) already satisfied. After Batch 4, re-DISCOVER must mine DEEPER (test gaps, docs accuracy, edge cases) or run the DONE gate — do NOT churn --json onto action commands beyond start/share/stop.
 
 <!--
 DISCOVER baseline (re-seed, 2026-06-05, fresh session after prior backlog cleared+merged):
