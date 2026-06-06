@@ -42,7 +42,7 @@ pub async fn run(args: &DomainArgs) -> Result<()> {
     match &args.command {
         DomainCommands::Add { domain } => add(domain).await,
         DomainCommands::List { json } => list(*json).await,
-        DomainCommands::Verify { domain } => verify(domain).await,
+        DomainCommands::Verify { domain, json } => verify(domain, *json).await,
         DomainCommands::Remove { domain } => remove(domain).await,
     }
 }
@@ -183,10 +183,34 @@ async fn list(json: bool) -> Result<()> {
 }
 
 /// `lane domain verify <domain>`.
-async fn verify(domain: &str) -> Result<()> {
+async fn verify(domain: &str, json: bool) -> Result<()> {
     let info = auth::require()?;
     let token = info.token;
     let domain = domain.to_string();
+
+    // `--json` skips the spinner UI and emits a structured outcome so CI/scripts
+    // can consume it. A domain-level failure (not found, API rejection, transport)
+    // becomes `{verified:false, error}` rather than a human error line; the
+    // process still exits 0 — consumers branch on the `verified` field.
+    if json {
+        let payload = match do_verify(&token, &domain).await {
+            Ok(status) => VerifyJson {
+                domain: domain.clone(),
+                verified: status == "active",
+                status: Some(status),
+                error: None,
+            },
+            Err(e) => VerifyJson {
+                domain: domain.clone(),
+                verified: false,
+                status: None,
+                error: Some(e.to_string()),
+            },
+        };
+        let data = serde_json::to_string_pretty(&payload).context("marshaling JSON")?;
+        println!("{data}");
+        return Ok(());
+    }
 
     let step_token = token.clone();
     let step_domain = domain.clone();
@@ -196,54 +220,76 @@ async fn verify(domain: &str) -> Result<()> {
         interactive: false,
         run: Box::new(move || {
             block_on(async move {
-                let domains = fetch_domains(&step_token).await?;
-                let domain_id = find_domain_id(&domains, &step_domain);
-                if domain_id.is_empty() {
-                    return Err(anyhow!(
-                        "domain {step_domain} not found — use 'lane domain add' first"
-                    ));
-                }
-
-                let client = http_client(Duration::from_secs(10))?;
-                let resp = client
-                    .post(format!(
-                        "{}/api/domains/{domain_id}/verify",
-                        config::api_base_url()
-                    ))
-                    .header("Authorization", format!("Bearer {step_token}"))
-                    .send()
-                    .await
-                    .map_err(|e| anyhow!("verifying domain: {e}"))?;
-
-                let status = resp.status().as_u16();
-                if status != 200 {
-                    let status_line = status_string(resp.status());
-                    let body_bytes = resp.bytes().await.unwrap_or_default();
-                    let mut msg = String::from_utf8_lossy(&body_bytes).trim().to_string();
-                    if msg.is_empty() {
-                        msg = status_line;
-                    }
-                    return Err(anyhow!("{msg}"));
-                }
-
-                #[derive(Default, Deserialize)]
-                struct VerifyResult {
-                    #[serde(default)]
-                    status: String,
-                }
-                let result: VerifyResult = match resp.json().await {
-                    Ok(v) => v,
-                    Err(_) => return Ok("done".to_string()),
-                };
-
-                Ok(match result.status.as_str() {
-                    "active" => "verified".to_string(),
-                    "issuing_cert" => "issuing certificate (this may take a moment)".to_string(),
-                    _ => "done".to_string(),
-                })
+                let status = do_verify(&step_token, &step_domain).await?;
+                Ok(verify_message(&status))
             })
         }),
     }])
+}
+
+/// Structured result of `lane domain verify --json`.
+#[derive(Serialize)]
+struct VerifyJson {
+    domain: String,
+    verified: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Fetch the domain, POST its verify endpoint, and return the raw API status
+/// string (`"active"`, `"issuing_cert"`, …; empty if the body is undecodable).
+/// Errors mirror Go: not-found and non-200 responses surface their message.
+async fn do_verify(token: &str, domain: &str) -> Result<String> {
+    let domains = fetch_domains(token).await?;
+    let domain_id = find_domain_id(&domains, domain);
+    if domain_id.is_empty() {
+        return Err(anyhow!(
+            "domain {domain} not found — use 'lane domain add' first"
+        ));
+    }
+
+    let client = http_client(Duration::from_secs(10))?;
+    let resp = client
+        .post(format!(
+            "{}/api/domains/{domain_id}/verify",
+            config::api_base_url()
+        ))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .map_err(|e| anyhow!("verifying domain: {e}"))?;
+
+    let status = resp.status().as_u16();
+    if status != 200 {
+        let status_line = status_string(resp.status());
+        let body_bytes = resp.bytes().await.unwrap_or_default();
+        let mut msg = String::from_utf8_lossy(&body_bytes).trim().to_string();
+        if msg.is_empty() {
+            msg = status_line;
+        }
+        return Err(anyhow!("{msg}"));
+    }
+
+    #[derive(Default, Deserialize)]
+    struct VerifyResult {
+        #[serde(default)]
+        status: String,
+    }
+    match resp.json::<VerifyResult>().await {
+        Ok(v) => Ok(v.status),
+        Err(_) => Ok(String::new()),
+    }
+}
+
+/// Map a raw verify status string to the human spinner message (Go parity).
+fn verify_message(status: &str) -> String {
+    match status {
+        "active" => "verified".to_string(),
+        "issuing_cert" => "issuing certificate (this may take a moment)".to_string(),
+        _ => "done".to_string(),
+    }
 }
 
 /// `lane domain remove <domain>`.
@@ -483,6 +529,48 @@ mod tests {
         assert!(json.contains("\"domain\":\"app.example.com\""));
         assert!(json.contains("\"status\":\"active\""));
         assert!(json.contains("\"created_at\":\"2024-01-01T00:00:00Z\""));
+    }
+
+    #[test]
+    fn verify_message_maps_status_like_go() {
+        assert_eq!(verify_message("active"), "verified");
+        assert_eq!(
+            verify_message("issuing_cert"),
+            "issuing certificate (this may take a moment)"
+        );
+        assert_eq!(verify_message("pending"), "done");
+        assert_eq!(verify_message(""), "done");
+    }
+
+    #[test]
+    fn verify_json_success_shape() {
+        let ok = VerifyJson {
+            domain: "app.test".into(),
+            verified: true,
+            status: Some("active".into()),
+            error: None,
+        };
+        let json = serde_json::to_string(&ok).expect("serialize");
+        assert!(json.contains("\"domain\":\"app.test\""));
+        assert!(json.contains("\"verified\":true"));
+        assert!(json.contains("\"status\":\"active\""));
+        // error omitted when None.
+        assert!(!json.contains("error"));
+    }
+
+    #[test]
+    fn verify_json_error_shape() {
+        let err = VerifyJson {
+            domain: "missing.test".into(),
+            verified: false,
+            status: None,
+            error: Some("domain missing.test not found — use 'lane domain add' first".into()),
+        };
+        let json = serde_json::to_string(&err).expect("serialize");
+        assert!(json.contains("\"verified\":false"));
+        assert!(json.contains("\"error\":\"domain missing.test not found"));
+        // status omitted when None.
+        assert!(!json.contains("status"));
     }
 
     #[test]
