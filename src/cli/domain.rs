@@ -10,9 +10,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Local};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::auth;
@@ -25,7 +25,7 @@ use super::{DomainArgs, DomainCommands};
 
 /// A custom-domain record returned by the API. JSON tags match the Go struct
 /// (`id`, `domain`, `status`, `created_at`).
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct DomainEntry {
     #[serde(default)]
     id: String,
@@ -41,7 +41,7 @@ struct DomainEntry {
 pub async fn run(args: &DomainArgs) -> Result<()> {
     match &args.command {
         DomainCommands::Add { domain } => add(domain).await,
-        DomainCommands::List => list().await,
+        DomainCommands::List { json } => list(*json).await,
         DomainCommands::Verify { domain } => verify(domain).await,
         DomainCommands::Remove { domain } => remove(domain).await,
     }
@@ -126,7 +126,7 @@ async fn add(domain: &str) -> Result<()> {
 }
 
 /// `lane domain list`.
-async fn list() -> Result<()> {
+async fn list(json: bool) -> Result<()> {
     let info = auth::require()?;
     let token = info.token;
 
@@ -146,6 +146,12 @@ async fn list() -> Result<()> {
     }])?;
 
     let domains = domains.lock().unwrap();
+
+    if json {
+        let data = serde_json::to_string_pretty(&*domains).context("marshaling JSON")?;
+        println!("{data}");
+        return Ok(());
+    }
 
     if domains.is_empty() {
         println!("No custom domains. Use 'lane domain add <domain>' to add one.");
@@ -462,5 +468,35 @@ mod tests {
         assert_eq!(d.domain, "x.test");
         assert_eq!(d.status, "");
         assert_eq!(d.created_at, "");
+    }
+
+    #[test]
+    fn domain_entry_serializes_with_go_json_tags() {
+        let d = DomainEntry {
+            id: "d1".into(),
+            domain: "app.example.com".into(),
+            status: "active".into(),
+            created_at: "2024-01-01T00:00:00Z".into(),
+        };
+        let json = serde_json::to_string(&d).expect("serialize");
+        assert!(json.contains("\"id\":\"d1\""));
+        assert!(json.contains("\"domain\":\"app.example.com\""));
+        assert!(json.contains("\"status\":\"active\""));
+        assert!(json.contains("\"created_at\":\"2024-01-01T00:00:00Z\""));
+    }
+
+    #[test]
+    fn domain_list_json_is_an_array() {
+        // `lane domain list --json` emits a top-level JSON array; empty -> "[]".
+        let empty: Vec<DomainEntry> = Vec::new();
+        assert_eq!(serde_json::to_string(&empty).expect("serialize"), "[]");
+
+        let domains = vec![DomainEntry {
+            domain: "x.test".into(),
+            ..Default::default()
+        }];
+        let json = serde_json::to_string_pretty(&domains).expect("serialize");
+        assert!(json.trim_start().starts_with('['));
+        assert!(json.contains("\"domain\": \"x.test\""));
     }
 }
