@@ -220,6 +220,9 @@ pub(crate) enum DomainCommands {
     Verify {
         /// Domain to verify
         domain: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Remove a custom domain
     Remove {
