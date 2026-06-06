@@ -26,7 +26,11 @@ pub async fn run(args: &super::UpArgs) -> Result<()> {
 
     pc.validate()?;
 
-    println!("Using {}", path.display());
+    // --json suppresses the human chatter ("Using …" + the services table) so the
+    // only thing on stdout is the JSON object emitted at the end.
+    if !args.json {
+        println!("Using {}", path.display());
+    }
 
     setup::ensure_first_run()?;
 
@@ -81,9 +85,27 @@ pub async fn run(args: &super::UpArgs) -> Result<()> {
             routes: svc.routes.clone(),
         })
         .collect();
-    print_services(&domains);
+
+    if args.json {
+        let payload = up_json_payload(&path.display().to_string(), &domains);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).context("marshaling JSON")?
+        );
+    } else {
+        print_services(&domains);
+    }
 
     Ok(())
+}
+
+/// Build the `lane up --json` payload: the resolved config path and the services
+/// that were started (each `Domain` serializes as `{name, port, routes?}`).
+fn up_json_payload(config_path: &str, domains: &[Domain]) -> serde_json::Value {
+    serde_json::json!({
+        "config": config_path,
+        "started": domains,
+    })
 }
 
 /// Merge the project config's services into the global config under a file lock.
@@ -117,8 +139,40 @@ fn merge_project_into_config(pc: &ProjectConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Route;
     use crate::project::Service;
     use serial_test::serial;
+
+    // `lane up --json` payload carries the config path and the started services;
+    // each Domain nests `{name, port, routes?}` (routes omitted when empty).
+    #[test]
+    fn up_json_payload_has_config_and_started() {
+        let domains = vec![
+            Domain {
+                name: "myapp.test".into(),
+                port: 3000,
+                routes: vec![],
+            },
+            Domain {
+                name: "api.test".into(),
+                port: 8080,
+                routes: vec![Route {
+                    path: "/v1".into(),
+                    port: 9000,
+                }],
+            },
+        ];
+        let v = up_json_payload("/tmp/.lane.yaml", &domains);
+        assert_eq!(v["config"], "/tmp/.lane.yaml");
+        let started = v["started"].as_array().expect("started is array");
+        assert_eq!(started.len(), 2);
+        assert_eq!(v["started"][0]["name"], "myapp.test");
+        assert_eq!(v["started"][0]["port"], 3000);
+        // routes omitted when empty (skip_serializing_if on Domain::routes).
+        assert!(v["started"][0].get("routes").is_none());
+        assert_eq!(v["started"][1]["routes"][0]["path"], "/v1");
+        assert_eq!(v["started"][1]["routes"][0]["port"], 9000);
+    }
 
     /// Point HOME at an isolated temp dir so `config::dir()` resolves there.
     fn isolate_home() -> tempfile::TempDir {
