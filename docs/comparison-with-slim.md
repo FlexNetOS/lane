@@ -14,7 +14,9 @@ library give way to `tokio`, `hyper`, and `rustls`. Behavior does not change.
 
 This document covers three things:
 
-1. The **command parity table** — every command and its flags, identical between the two.
+1. The **command parity table** — every command and its flags, identical between the two
+   (plus a short note on `lane`'s additive, opt-in extras such as `--json`, which leave the
+   default behavior unchanged).
 2. The **implementation mapping** — which Rust crate replaces each Go package.
 3. The **rename table** and **what is intentionally not included** (the hosted control
    plane behind `*.lane.show`).
@@ -54,6 +56,26 @@ reproduced verbatim; the daemon detaches and the CLI talks to it over a Unix-dom
 socket; the proxy listens on the same high ports (`10080`/`10443`) with 80/443
 redirected into them. Where the Go code matched on substrings of error text, the Rust
 port keeps that text identical so the ported test suite still asserts the same strings.
+
+### Additions beyond slim (additive, opt-in — default behavior is unchanged)
+
+The faithful-port guarantee is about *default* behavior: every command above, run as
+slim runs it, produces slim's exact output and side effects. On top of that, `lane`
+adds a few **backward-compatible, opt-in** conveniences that slim does not have. They
+never change the human output unless you ask for them:
+
+- **`--json` across the CLI.** A machine-readable mode for scripting/CI on
+  `start`, `stop`, `up`, `down`, `list`, `logs`, `share`, `doctor`, `version`, and
+  every `domain` subcommand (`add`/`list`/`verify`/`remove`). slim has `--json` only on
+  `list`; `lane` extends the same pattern everywhere structured output is useful.
+  `share --json` is an NDJSON event stream (`connected` / `request` / `disconnected`),
+  so a script can capture the public tunnel URL without scraping the terminal.
+- **`logs -n/--lines <count>`** to print only the last N records.
+- **`restart`** to bounce the daemon, and **`completions <shell>`** to emit a shell
+  completion script (bash/zsh/fish/powershell).
+
+These are purely additive: omit the flags/commands and `lane` behaves exactly like
+slim. See [commands.md](./commands.md) for the per-command `--json` payload shapes.
 
 ---
 
