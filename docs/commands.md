@@ -48,7 +48,7 @@ automatically if needed.
 ### Synopsis
 
 ```
-lane start <name> --port <port> [--route <path=port>]... [--log-mode <mode>] [--cors] [--wait [--timeout <duration>]]
+lane start <name> --port <port> [--route <path=port>]... [--log-mode <mode>] [--cors] [--wait [--timeout <duration>]] [--json]
 ```
 
 ### Description
@@ -80,6 +80,7 @@ resolution); the domain is still started.
 | `--cors` | | bool | `false` | Enable CORS headers on proxied responses. Only applied when the flag is explicitly set; otherwise the existing config value is preserved. |
 | `--wait` | | bool | `false` | Wait for the upstream app to become reachable before the command returns. Each upstream port (the main port plus every route port) is polled until reachable or the timeout elapses. |
 | `--timeout` | | duration | `30s` | Maximum time to wait per upstream when `--wait` is set. Passing `--timeout` without `--wait` is an error; the value must be greater than 0. |
+| `--json` | | bool | `false` | Emit a JSON object instead of the human output: `{ "domain", "port", "url", "routes"? }`, where `url` is `https://<domain>`. With `--wait`, the progress lines are written to stderr so stdout stays pure JSON. |
 
 ### Examples
 
@@ -89,6 +90,9 @@ lane start myapp --port 3000
 
 # Custom TLD, path routing, and CORS, waiting up to 60s for upstreams
 lane start app.loc --port 3000 --route /api=8080 --route /ws=9000 --cors --wait --timeout 60s
+
+# Capture the mapped URL in a script
+lane start myapp --port 3000 --json
 ```
 
 On success it prints the mapped URL(s), for example:
@@ -106,7 +110,7 @@ Stop proxying a single domain, or stop everything and shut down the daemon.
 ### Synopsis
 
 ```
-lane stop [name]
+lane stop [name] [--json]
 ```
 
 ### Description
@@ -128,13 +132,16 @@ not running, it prints `Nothing is running.`.
 
 ### Flags
 
-_None._
+| Flag | Short | Type | Default | Meaning |
+|---|---|---|---|---|
+| `--json` | | bool | `false` | Emit a JSON object instead of the human output: `{ "stopped": [domain…], "daemon": "shutdown" \| "reloaded" \| "not_running", "warnings"? }`. |
 
 ### Examples
 
 ```bash
 lane stop myapp     # stop one domain
 lane stop           # stop everything and shut down the daemon
+lane stop --json    # JSON result for scripts
 ```
 
 ---
@@ -146,7 +153,7 @@ Start all services defined in a `.lane.yaml` project file.
 ### Synopsis
 
 ```
-lane up [--config <path>]
+lane up [--config <path>] [--json]
 ```
 
 ### Description
@@ -188,12 +195,14 @@ _None._
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
 | `--config` | `-c` | string | _(auto-discover)_ | Path to a `.lane.yaml` file. When omitted, `lane` searches the current directory and its parents. |
+| `--json` | | bool | `false` | Emit a JSON object instead of the human output: `{ "config", "started": [{ "name", "port", "routes"? }] }`. Suppresses the `Using <path>` line and the services table. |
 
 ### Examples
 
 ```bash
 lane up                                # start all services from discovered .lane.yaml
 lane up --config /path/to/.lane.yaml   # use an explicit project file
+lane up --json                         # JSON for scripts: which services started
 ```
 
 ---
@@ -205,7 +214,7 @@ Stop the services defined in a `.lane.yaml` project file, leaving other domains 
 ### Synopsis
 
 ```
-lane down [--config <path>]
+lane down [--config <path>] [--json]
 ```
 
 ### Description
@@ -225,12 +234,14 @@ _None._
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
 | `--config` | `-c` | string | _(auto-discover)_ | Path to a `.lane.yaml` file. When omitted, `lane` searches the current directory and its parents. |
+| `--json` | | bool | `false` | Emit a JSON object instead of the human output: `{ "stopped": [domain…], "remaining", "daemon": "stopped" \| "reloaded" \| "not_running", "warnings"? }`. |
 
 ### Examples
 
 ```bash
 lane down                                # stop services from discovered .lane.yaml
 lane down --config /path/to/.lane.yaml   # use an explicit project file
+lane down --json                         # JSON for scripts: which services stopped
 ```
 
 ---
@@ -293,7 +304,7 @@ Show the proxy access log, optionally filtered by domain, followed, or cleared.
 ### Synopsis
 
 ```
-lane logs [name] [-f | --follow] [--flush]
+lane logs [name] [-f | --follow] [--flush] [-n <count> | --lines <count>] [--json]
 ```
 
 ### Description
@@ -322,6 +333,8 @@ prints `Cleared access logs.` (or `No logs to clear.` if the file does not exist
 |---|---|---|---|---|
 | `--follow` | `-f` | bool | `false` | Continuously tail the log, printing new lines as they arrive. |
 | `--flush` | | bool | `false` | Clear (truncate) the access-log file. Cannot be combined with `--follow` (`--flush cannot be used with --follow`) or with a `name` argument (`--flush does not support domain filter`). |
+| `--lines` | `-n` | int | _(all)_ | Show only the last `<count>` matching records. |
+| `--json` | | bool | `false` | Emit each record as a compact NDJSON object (one per line) instead of the colorized line. Full records carry `ts`, `domain`, `method`, `path`, `upstream`, `status`, `duration`; minimal records carry `ts`, `domain`, `status`, `duration`. Honored in both the tail and `--follow` paths. |
 
 ### Examples
 
@@ -329,6 +342,8 @@ prints `Cleared access logs.` (or `No logs to clear.` if the file does not exist
 lane logs               # print all access logs
 lane logs myapp         # only lines for myapp.test
 lane logs -f            # follow new requests live
+lane logs -n 50         # last 50 records
+lane logs --json        # NDJSON for log processors
 lane logs --flush       # clear the access log
 ```
 
@@ -341,7 +356,7 @@ Expose a local port to the internet via a `lane.show` tunnel. Requires `lane log
 ### Synopsis
 
 ```
-lane share --port <port> [--subdomain <name> | --domain <fqdn>] [--password <secret>] [--ttl <duration>]
+lane share --port <port> [--subdomain <name> | --domain <fqdn>] [--password <secret>] [--ttl <duration>] [--json]
 ```
 
 ### Description
@@ -380,6 +395,7 @@ _None._
 | `--password` | | string | _(none)_ | Require this password for tunnel access. Pro feature. |
 | `--ttl` | | duration | _(none)_ | Tunnel time-to-live, e.g. `30m`, `1h`. Free tier: max 1h. Pro: unlimited. When elapsed, the tunnel disconnects automatically. |
 | `--domain` | | string | _(none)_ | Serve the tunnel on a custom domain you have added and verified (see `lane domain`). Pro feature. Mutually exclusive with `--subdomain`. |
+| `--json` | | bool | `false` | Emit an NDJSON event stream instead of the human output: one `{ "event": "connected", "url", "port", "local", "domain_url"?, "password"? }` on connect, a `{ "event": "request", "method", "path", "status", "duration" }` per proxied request, and `{ "event": "disconnected" }` on Ctrl+C. The Pro-subscription path emits `{ "event": "error", "error", "upgrade_url" }`. Scripts read the first line to capture the public `url`. |
 
 ### Examples
 
@@ -389,6 +405,7 @@ lane share --port 3000 --subdomain demo             # https://demo.lane.show
 lane share --port 3000 --password secret            # password protected
 lane share --port 3000 --ttl 30m                    # auto-expire after 30 minutes
 lane share --port 3000 --domain myapp.example.com   # custom domain
+lane share --port 3000 --json                       # NDJSON stream; capture the public URL
 ```
 
 ---
@@ -469,11 +486,15 @@ your saved token.
 ### Synopsis
 
 ```
-lane domain add <domain>
-lane domain list
-lane domain verify <domain>
-lane domain remove <domain>
+lane domain add <domain> [--json]
+lane domain list [--json]
+lane domain verify <domain> [--json]
+lane domain remove <domain> [--json]
 ```
+
+Every `domain` subcommand accepts `--json` to emit a machine-readable object instead of the
+human output (shapes documented per subcommand below); the human output is unchanged without
+the flag.
 
 ### domain add
 
@@ -492,10 +513,12 @@ suggests running `lane domain verify <domain>`.
 |---|---|---|
 | `<domain>` | yes (exactly one) | The fully-qualified custom domain to add (for example `tunnel.example.com`). |
 
-Flags: _none._
+Flags: `--json` — emit `{ "domain", "target_ip", "dns": { "type", "name", "value" } }` (the
+verification A record) instead of the human block. A failed add is a hard error (non-zero exit).
 
 ```bash
 lane domain add tunnel.example.com
+lane domain add tunnel.example.com --json
 ```
 
 ### domain list
@@ -511,10 +534,12 @@ one of `● active`, `● generating cert` (issuing the TLS certificate), or `�
 (awaiting DNS verification). When you have none it prints `No custom domains. Use 'lane
 domain add <domain>' to add one.`.
 
-Arguments: _none._  Flags: _none._
+Arguments: _none._  Flags: `--json` — emit a JSON array of domain objects
+(`{ "id", "domain", "status", "created_at" }`); an empty list serializes to `[]`.
 
 ```bash
 lane domain list
+lane domain list --json
 ```
 
 ### domain verify
@@ -534,10 +559,13 @@ cert is being provisioned, or `done` otherwise.
 |---|---|---|
 | `<domain>` | yes (exactly one) | The custom domain to verify. |
 
-Flags: _none._
+Flags: `--json` — emit `{ "domain", "verified", "status"?, "error"? }`. A domain-level failure
+(not found / API / transport) becomes `{ "verified": false, "error" }` and exits 0; consumers
+branch on `verified`.
 
 ```bash
 lane domain verify tunnel.example.com
+lane domain verify tunnel.example.com --json
 ```
 
 ### domain remove
@@ -557,10 +585,13 @@ removal. On success it prints `✓ Removed <domain>`.
 |---|---|---|
 | `<domain>` | yes (exactly one) | The custom domain to remove. |
 
-Flags: _none._
+Flags: `--json` — emit `{ "domain", "removed", "error"? }`. `--json` is non-interactive: an
+un-forced 409 (active tunnel) becomes `{ "removed": false, "error" }` instead of prompting for
+a forced removal (re-run without `--json` to confirm one).
 
 ```bash
 lane domain remove tunnel.example.com
+lane domain remove tunnel.example.com --json
 ```
 
 ---
@@ -572,7 +603,7 @@ Diagnose setup issues and print a pass/warn/fail checklist.
 ### Synopsis
 
 ```
-lane doctor
+lane doctor [--json]
 ```
 
 ### Description
@@ -598,12 +629,15 @@ _None._
 
 ### Flags
 
-_None._
+| Flag | Short | Type | Default | Meaning |
+|---|---|---|---|---|
+| `--json` | | bool | `false` | Emit the report as JSON — `{ "results": [{ "name", "status", "message" }] }`, where `status` is `pass`, `warn`, or `fail` — instead of the human checklist. `doctor` stays read-only and never triggers a sudo prompt. |
 
 ### Example
 
 ```bash
 lane doctor
+lane doctor --json   # machine-readable report
 ```
 
 ```
@@ -705,12 +739,12 @@ Print the `lane` version.
 ### Synopsis
 
 ```
-lane version
+lane version [--json]
 ```
 
 ### Description
 
-Prints `lane <version>` and exits.
+Prints `lane <version>` and exits. With `--json`, prints a self-describing object instead.
 
 ### Arguments
 
@@ -718,13 +752,18 @@ _None._
 
 ### Flags
 
-_None._
+| Flag | Short | Type | Default | Meaning |
+|---|---|---|---|---|
+| `--json` | | bool | `false` | Emit `{ "name", "version" }` (pretty-printed) instead of the `lane <version>` line. |
 
 ### Examples
 
 ```bash
 lane version
 # lane 0.1.0
+
+lane version --json
+# { "name": "lane", "version": "0.1.0" }
 ```
 
 ---
