@@ -231,6 +231,9 @@ pub(crate) enum DomainCommands {
     Remove {
         /// Domain to remove
         domain: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 

@@ -43,7 +43,7 @@ pub async fn run(args: &DomainArgs) -> Result<()> {
         DomainCommands::Add { domain, json } => add(domain, *json).await,
         DomainCommands::List { json } => list(*json).await,
         DomainCommands::Verify { domain, json } => verify(domain, *json).await,
-        DomainCommands::Remove { domain } => remove(domain).await,
+        DomainCommands::Remove { domain, json } => remove(domain, *json).await,
     }
 }
 
@@ -336,10 +336,31 @@ fn verify_message(status: &str) -> String {
 }
 
 /// `lane domain remove <domain>`.
-async fn remove(domain: &str) -> Result<()> {
+async fn remove(domain: &str, json: bool) -> Result<()> {
     let info = auth::require()?;
     let token = info.token;
     let domain = domain.to_string();
+
+    // `--json` is non-interactive: it cannot run the 409 "active tunnel" confirm
+    // prompt, so an un-forced 409 becomes `{removed:false, error}` (the human path
+    // below still offers the forced-removal confirmation).
+    if json {
+        let payload = match do_remove(&token, &domain).await {
+            Ok(()) => RemoveJson {
+                domain: domain.clone(),
+                removed: true,
+                error: None,
+            },
+            Err(e) => RemoveJson {
+                domain: domain.clone(),
+                removed: false,
+                error: Some(e.to_string()),
+            },
+        };
+        let data = serde_json::to_string_pretty(&payload).context("marshaling JSON")?;
+        println!("{data}");
+        return Ok(());
+    }
 
     let domains = fetch_domains(&token).await?;
 
@@ -405,6 +426,50 @@ async fn remove(domain: &str) -> Result<()> {
     }
 
     println!("\n{} Removed {domain}", term::check_mark());
+    Ok(())
+}
+
+/// Structured result of `lane domain remove --json`.
+#[derive(Serialize)]
+struct RemoveJson {
+    domain: String,
+    removed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Non-interactive domain removal used by `remove --json`. Unlike the human
+/// path, a 409 (active tunnel) is surfaced as an error rather than prompting for
+/// a forced removal — JSON mode cannot prompt.
+async fn do_remove(token: &str, domain: &str) -> Result<()> {
+    let domains = fetch_domains(token).await?;
+    let domain_id = find_domain_id(&domains, domain);
+    if domain_id.is_empty() {
+        return Err(anyhow!("domain {domain} not found"));
+    }
+
+    let client = http_client(Duration::from_secs(10))?;
+    let resp = client
+        .delete(format!(
+            "{}/api/domains/{domain_id}",
+            config::api_base_url()
+        ))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .map_err(|e| anyhow!("removing domain: {e}"))?;
+
+    let status = resp.status().as_u16();
+    if status == 409 {
+        drop(resp);
+        return Err(anyhow!(
+            "{domain} has an active tunnel — disconnect it first, or run 'lane domain remove {domain}' without --json to confirm a forced removal"
+        ));
+    }
+    if status != 200 && status != 204 {
+        return Err(api_error(resp, "failed to remove domain").await);
+    }
+
     Ok(())
 }
 
@@ -572,6 +637,28 @@ mod tests {
         assert!(json.contains("\"domain\":\"app.example.com\""));
         assert!(json.contains("\"status\":\"active\""));
         assert!(json.contains("\"created_at\":\"2024-01-01T00:00:00Z\""));
+    }
+
+    #[test]
+    fn remove_json_success_and_error_shapes() {
+        let ok = RemoveJson {
+            domain: "app.test".into(),
+            removed: true,
+            error: None,
+        };
+        let json = serde_json::to_string(&ok).expect("serialize");
+        assert!(json.contains("\"domain\":\"app.test\""));
+        assert!(json.contains("\"removed\":true"));
+        assert!(!json.contains("error")); // omitted when None
+
+        let err = RemoveJson {
+            domain: "app.test".into(),
+            removed: false,
+            error: Some("app.test has an active tunnel".into()),
+        };
+        let json = serde_json::to_string(&err).expect("serialize");
+        assert!(json.contains("\"removed\":false"));
+        assert!(json.contains("\"error\":\"app.test has an active tunnel\""));
     }
 
     #[test]
