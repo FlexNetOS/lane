@@ -23,7 +23,7 @@ Legend: [ ] todo · [x] done+verified · [!] blocked: <reason>
 - [x] Document `--json` across `docs/commands.md` — added a `--json` row+shape+example to start/stop/up/down/list/logs/share/doctor/version and all 4 domain subcommands (+ logs `-n/--lines`). — PR #24, docs-only, 222 tests unaffected. Auto-merge ARMED.
 
 ## Batch 6 (CONVERGING — substantive backlog nearly exhausted; verify before declaring DONE)
-- [ ] (thin) Note lane's `--json` enhancements over slim in `docs/comparison-with-slim.md` — slim has no `--json`; lane adds it across the CLI. One short paragraph. Docs-only.
+- [x] (thin) Note lane's `--json` enhancements over slim in `docs/comparison-with-slim.md`. — PR #25, docs-only ('Additions beyond slim' subsection + intro qualifier). Auto-merge ARMED.
 
 CONVERGENCE NOTE (2026-06-05): The real enhancement backlog is essentially exhausted — PRD all 12
 goals shipped (full slim parity), `--json` complete + documented across every value-adding command,
