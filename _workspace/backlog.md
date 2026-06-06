@@ -1,7 +1,7 @@
 # lane backlog
 Legend: [ ] todo · [x] done+verified · [!] blocked: <reason>
 
-- [ ] Add `--json` to `lane domain list` — emit a stable machine-readable array of custom domains (parity with `lane list --json`), pretty-printed, deserializable; human table unchanged without the flag. Fully verifiable in an isolated HOME, no privilege.
+- [x] Add `--json` to `lane domain list` — emit a stable machine-readable array of custom domains (parity with `lane list --json`), pretty-printed, deserializable; human table unchanged without the flag. — PR #15, green local gate (212 tests +2, clippy clean, fmt clean, `--json` in help, Rust-native only-.rs). Auto-merge ARMED (`gh pr merge 15 --auto --merge`) → lands hands-free on green CI.
 - [ ] Make doctor `run()` an `async fn run() -> Report` per ARCHITECTURE.md:411 `(preferred)` note ("Mark in cli") — the IPC + health checks are already async; collapse the internal block_on/bridge, CLI awaits it. Behavior-preserving refactor; proven by unchanged doctor output + green tests.
 - [ ] Add `--json` to `lane domain verify <domain>` — emit `{domain, verified, error?}` for CI/scripting; the arg-parse + error-JSON-shape paths are unit-testable without network. Human output unchanged without the flag.
 
