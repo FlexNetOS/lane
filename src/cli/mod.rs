@@ -198,6 +198,9 @@ pub(crate) struct ShareArgs {
     /// Custom domain for this tunnel
     #[arg(long)]
     pub domain: Option<String>,
+    /// Output as JSON (NDJSON event stream: connected, request*, disconnected)
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
