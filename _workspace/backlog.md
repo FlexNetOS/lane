@@ -6,7 +6,7 @@ Legend: [ ] todo · [x] done+verified · [!] blocked: <reason>
 - [x] Add `--json` to `lane domain verify <domain>` — emit `{domain, verified, status?, error?}` for CI/scripting. — PR #16, green local gate (215 tests +3, clippy/fmt clean, `--json` in help, Rust-native only-.rs). Auto-merge ARMED → lands hands-free on green CI.
 
 ## Batch 2 (re-DISCOVER 2026-06-05 — complete domain-subcommand JSON coverage; depends on #16 merging since same file `domain.rs`)
-- [ ] Add `--json` to `lane domain add <domain>` — emit `{domain, target_ip, dns: {type, name, value}}` so scripts can read the DNS record to create without scraping the human block. Human output unchanged without the flag.
+- [x] Add `--json` to `lane domain add <domain>` — emit `{domain, target_ip, dns:{type,name,value}}`. — PR #17, green local gate (216 tests +1, clippy/fmt clean, `--json` in help, Rust-native). Auto-merge ARMED.
 - [ ] Add `--json` to `lane domain remove <domain>` — emit `{domain, removed: bool, error?}`; the 409 "active tunnel" interactive confirm path stays human-only (in --json mode, treat an un-forced 409 as `{removed:false, error}` rather than prompting). Human output unchanged without the flag.
 
 <!--
