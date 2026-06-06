@@ -20,7 +20,19 @@ Legend: [ ] todo · [x] done+verified · [!] blocked: <reason>
 - [x] Add `--json` to `lane stop` — emit `{stopped:[domain…], daemon, warnings?}`. — PR #23, green local gate (223 tests +1, clippy/fmt clean, `--json` in help, Rust-native). Auto-merge ARMED.
 
 ## Batch 5 (DEEPER re-DISCOVER 2026-06-05 — docs sync; the --json surface grew but docs lag)
-- [ ] Document `--json` across `docs/commands.md` — the flag now exists on domain list/verify/add/remove, up, down, start, share, stop (+ earlier doctor/logs/version) but only `lane list` is documented. Add a `--json` note to each section with its payload shape. Docs-only; verify by re-grepping. (rust-native: .md only, no product drift.)
+- [x] Document `--json` across `docs/commands.md` — added a `--json` row+shape+example to start/stop/up/down/list/logs/share/doctor/version and all 4 domain subcommands (+ logs `-n/--lines`). — PR #24, docs-only, 222 tests unaffected. Auto-merge ARMED.
+
+## Batch 6 (CONVERGING — substantive backlog nearly exhausted; verify before declaring DONE)
+- [ ] (thin) Note lane's `--json` enhancements over slim in `docs/comparison-with-slim.md` — slim has no `--json`; lane adds it across the CLI. One short paragraph. Docs-only.
+
+CONVERGENCE NOTE (2026-06-05): The real enhancement backlog is essentially exhausted — PRD all 12
+goals shipped (full slim parity), `--json` complete + documented across every value-adding command,
+no code TODOs except deferred `TODO(test-phase)` integration tests that need a live daemon socket /
+privileged /etc/hosts+iptables (NOT runnable unattended → a genuine integration-env wall, not loop
+work). After the thin Batch-6 doc note, the next session should run the **DONE gate** (Phase 3:
+build+release+test+fmt+clippy green on integrated main, backlog clear, no `- [!]`) and write
+`_workspace/DONE` with evidence — a LEGITIMATE terminal now (everything merged+green), distinct from
+the earlier premature stop. Do NOT manufacture `--json`-on-action-command churn to keep the loop alive.
 
 NOTE: --json read/orchestration coverage is otherwise COMPLETE (list/doctor/logs/version/domain×4/up/down). lane is at full slim parity (PRD all 12 goals shipped), no code TODOs, the one ARCHITECTURE `(preferred)` note (doctor-async) already satisfied. After Batch 4, re-DISCOVER must mine DEEPER (test gaps, docs accuracy, edge cases) or run the DONE gate — do NOT churn --json onto action commands beyond start/share/stop.
 
