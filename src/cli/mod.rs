@@ -124,6 +124,9 @@ pub(crate) struct UpArgs {
     /// Path to .lane.yaml
     #[arg(short, long)]
     pub config: Option<String>,
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
