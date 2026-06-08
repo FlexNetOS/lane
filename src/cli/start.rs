@@ -5,11 +5,34 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 
 use crate::config::{self, Domain};
 use crate::daemon::{self, MessageType, Request};
 use crate::{cert, proxy, setup, system, term};
+
+/// Parse a comma-separated SAN string (e.g. `"10.0.0.1,extra.test"`) into
+/// a `Vec<SanType>`, auto-detecting IP vs DNS types.
+fn parse_extra_sans(raw: &str) -> Result<Vec<rcgen::SanType>> {
+    let mut sans = Vec::new();
+    for part in raw.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        // Auto-detect IP address vs DNS name.
+        if part.parse::<std::net::IpAddr>().is_ok() {
+            sans.push(rcgen::SanType::IpAddress(
+                part.parse().expect("valid IpAddr"),
+            ));
+        } else {
+            sans.push(rcgen::SanType::DnsName(
+                part.try_into().map_err(|e| anyhow!("invalid SAN DNS name: {e}"))?,
+            ));
+        }
+    }
+    Ok(sans)
+}
 
 /// Run `lane start`. Mirrors Go's `startCmd.RunE`.
 pub async fn run(args: &super::StartArgs) -> Result<()> {
@@ -51,7 +74,19 @@ pub async fn run(args: &super::StartArgs) -> Result<()> {
 
     system::add_host(&name).context("updating /etc/hosts")?;
 
-    cert::ensure_leaf_cert(&name).context("generating certificate")?;
+    // Generate (or renew) the leaf cert.  If --san was provided, append those
+    // extra SAN entries alongside the default set.
+    let extra_sans = args
+        .san
+        .as_ref()
+        .map(|s| parse_extra_sans(s))
+        .transpose()?;
+    if let Some(sans) = extra_sans {
+        cert::ensure_leaf_cert_sans(&name, cert::KeyType::EcdsaP256, sans)
+            .context("generating certificate with extra SANs")?;
+    } else {
+        cert::ensure_leaf_cert(&name).context("generating certificate")?;
+    }
 
     if !daemon::is_child() {
         let pf = system::new_port_forwarder();

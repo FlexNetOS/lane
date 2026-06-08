@@ -431,6 +431,34 @@ fn verify_ca_is_trusted() -> CheckResult {
     }
 }
 
+/// Auto-heal a single doctor check failure. Returns Some(message) on success or None
+/// if no auto-heal path exists for this check.
+pub async fn auto_heal_check(r: &CheckResult) -> anyhow::Result<Option<String>> {
+    match r.name.as_str() {
+        "CA certificate" => {
+            crate::cert::generate_ca(crate::cert::KeyType::Rsa2048)?;
+            Ok(Some("regenerated root CA cert and key".to_string()))
+        }
+        "CA trust" => {
+            match crate::cert::trust_ca() {
+                Ok(()) => Ok(Some("installed CA into OS trust store".to_string())),
+                Err(e) => Ok(Some(format!("install attempt: {e} (may require sudo)"))),
+            }
+        }
+        name if name.starts_with("Hosts:") => {
+            let domain = &name["Hosts: ".len()..];
+            system::add_host(domain)?;
+            Ok(Some(format!("added {domain} to /etc/hosts")))
+        }
+        name if name.starts_with("Leaf: ") => {
+            let domain = &name["Leaf: ".len()..];
+            crate::cert::generate_leaf_cert(domain, crate::cert::KeyType::EcdsaP256, None)?;
+            Ok(Some(format!("regenerated leaf cert for {domain}")))
+        }
+        _ => Ok(None), // Port forwarding / daemon etc. — not auto-healable without sudo.
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

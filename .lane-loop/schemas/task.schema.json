@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lane Backlog Item",
+  "description": "Schema for a lane-loop backlog entry. Adapted from weave/sessions-handoff task schema — lane-specific, no Rust CLI.",
+  "type": "object",
+  "required": ["schema", "id", "title"],
+  "properties": {
+    "schema": { "const": "lane.backlog.item.v1" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "status": { "type": "string", "enum": ["todo", "in_flight", "done", "blocked"] },
+    "priority": { "type": "string", "enum": ["P0", "P1", "P2"] },
+    "description": { "type": "string" },
+    "pipeline_stages": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["spec", "design", "implement", "verify", "test", "done"] }
+    },
+    "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
+    "cargo_commands": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Cargo commands to verify this item (inherited from lane's conventions: fmt, clippy, test)"
+    },
+    "dependencies": { "type": "array", "items": { "type": "string" } },
+    "blocked_by": { "type": "array", "items": { "type": "string" } },
+    "drift_check": { "type": "boolean", "description": "Must rust-native-guard pass before handoff?" },
+    "rust_native_only": { "type": "boolean", "default": true, "description": "Lane invariant: this item must be 100% Rust" }
+  },
+  "additionalProperties": false
+}

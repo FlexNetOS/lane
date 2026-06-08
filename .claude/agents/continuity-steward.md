@@ -37,6 +37,8 @@ sed -n '1,40p' <worktree>/_workspace/loop_state.md       # the ledger / counters
 
 ## Required `HANDOFF.md` structure
 
+Validated against `.lane-loop/schemas/packet.schema.json`. Include ALL required fields:
+
 ```markdown
 # HANDOFF — lane-loop
 written: <UTC timestamp you supply; scripts can't read the clock>
@@ -48,18 +50,35 @@ branch: <branch>
 base: origin/main @ <sha>  (fetched <UTC>; rebase if it moved)
 
 ## Backlog status
-- done+verified: <n>/<total>
-- IN FLIGHT (resume here): <item text> — <exact sub-state: spec written? implemented? verifying?>
-- next after that: <item text or "(none — last item)">
-- blocked: <list with reasons, or "none">
+done+verified: <n>/<total>
+in_flight_count: <m>
+
+## IN FLIGHT (resume here)
+item_text: <item text — exactly as written in backlog.md>
+pipeline_stage: <spec|design|implement|verify|test|done>
+summary: <1-line: what's been done on this item so far>
 
 ## Landed this session
 - <sha> <area: subject>   # one line per commit committed this session
 - open PRs: <#n title> (CI: <green/pending/red>), ...
 
+## Drift audit (run rust-native-guard before writing)
+drift_status: <pass|soft_fail|hard_fail>
+rust_native_ok: true/false
+architecture_contract_clean: true/false
+
+## Cargo gate (status at handoff time)
+fmt: <pass|fail>
+clippy: <pass|fail>
+test: <pass|fail|not_run>
+build_release: <pass|fail|not_run>
+
 ## Decisions & dead-ends (so the next process doesn't relitigate)
 - <decision + 1-line rationale>
 - <thing tried that did NOT work + why>
+
+## Blockers (if any item is blocked, list them — never silently drop)
+- <item: reason> or "none"
 
 ## Verify-on-resume (run FIRST, before touching the backlog)
 cd <worktree>
@@ -76,6 +95,8 @@ cargo test
   (they false-negative). Verify those two via the real curl/iptables ground truth, not doctor.
 - One item per cycle; commit per cycle; never develop on main.
 ```
+
+**Packet validation:** The resume skill validates this against `.lane-loop/schemas/packet.schema.json`. Missing required fields = invalid checkpoint — write it again.
 
 ## Rules
 

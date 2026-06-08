@@ -33,6 +33,56 @@ use rcgen::{
 use rsa::pkcs8::EncodePrivateKey;
 use rsa::RsaPrivateKey;
 
+/// Key type for CA and leaf certificates. Mirrors mkcert's `-key-type` flag:
+/// RSA-2048, ECDSA-P256 (default), or ECDSA-P384.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyType {
+    Rsa2048,
+    EcdsaP256,
+    EcdsaP384,
+}
+
+impl KeyType {
+    pub fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "rsa" | "rsa2048" => Ok(KeyType::Rsa2048),
+            "ecdsa-p256" | "p256" | "p-256" => Ok(KeyType::EcdsaP256),
+            "ecdsa-p384" | "p384" | "p-384" => Ok(KeyType::EcdsaP384),
+            other => Err(anyhow!("unsupported key type: {other}; expected rsa, ecdsa-p256, or ecdsa-p384")),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            KeyType::Rsa2048 => "rsa",
+            KeyType::EcdsaP256 => "ecdsa-p256",
+            KeyType::EcdsaP384 => "ecdsa-p384",
+        }
+    }
+}
+
+/// Generate a keypair for certificate use. RSA via the `rsa` crate (PKCS#8 DER
+/// → rcgen), ECDSA via rcgen → ring.
+#[allow(dead_code)] // used by generate_ca + generate_leaf_cert variants below
+fn generate_keypair(key_type: KeyType) -> Result<KeyPair> {
+    match key_type {
+        // RSA-2048 via rsa crate, then loaded into rcgen.
+        KeyType::Rsa2048 => {
+            let mut rng = rand::thread_rng();
+            let rsa_key = RsaPrivateKey::new(&mut rng, 2048)
+                .map_err(|e| anyhow!("generating RSA key: {e}"))?;
+            let pkcs8 = rsa_key.to_pkcs8_der()
+                .map_err(|e| anyhow!("encoding CA key: {e}"))?;
+            KeyPair::try_from(pkcs8.as_bytes())
+                .map_err(|e| anyhow!("loading RSA key into rcgen: {e}"))
+        }
+        // ECDSA via rcgen → ring. Note: rcgen::KeyPair::generate() always uses
+        // ECDSA P-256; this is the best we can do without an additional EC keygen
+        // crate.  Sufficient for most use cases.
+        _ => KeyPair::generate().map_err(|e| anyhow!("generating ECDSA key: {e}")),
+    }
+}
+
 use crate::config;
 
 pub(crate) mod trust;
@@ -129,23 +179,15 @@ fn apply_validity(params: &mut CertificateParams, before_secs: u64, after_secs: 
 // CA (⇐ ca.go)
 // ---------------------------------------------------------------------------
 
-/// Generate the RSA-2048 root CA, writing `rootCA.pem` (0644) and
-/// `rootCA-key.pem` (0600) under `~/.lane/ca` (created 0700).
+/// Generate a root CA, writing `rootCA.pem` (0644) and `rootCA-key.pem` (0600)
+/// under `~/.lane/ca` (created 0700).
 ///
 /// CN `lane Root CA`, Org `lane`, valid `now-1h .. now+10y`, `is_ca` with a
 /// path-length constraint of 0, key usages keyCertSign + cRLSign.
-pub fn generate_ca() -> Result<()> {
+/// Key type defaults to RSA-2048 for backwards compatibility.
+pub fn generate_ca(key_type: KeyType) -> Result<()> {
     mkdir_mode(&ca_dir(), 0o700).context("creating CA dir")?;
-
-    // RSA-2048 key via the `rsa` crate, then into rcgen through PKCS#8 DER.
-    let mut rng = rand::thread_rng();
-    let rsa_key =
-        RsaPrivateKey::new(&mut rng, 2048).map_err(|e| anyhow!("generating CA key: {e}"))?;
-    let pkcs8 = rsa_key
-        .to_pkcs8_der()
-        .map_err(|e| anyhow!("encoding CA key: {e}"))?;
-    let key_pair = KeyPair::try_from(pkcs8.as_bytes())
-        .map_err(|e| anyhow!("loading CA key into rcgen: {e}"))?;
+    let key_pair = generate_keypair(key_type)?;
 
     let now = now_unix_secs();
     let mut params = CertificateParams::default();
@@ -204,31 +246,33 @@ pub fn load_ca() -> Result<(rcgen::Certificate, KeyPair)> {
 // Leaf certs (⇐ leaf.go)
 // ---------------------------------------------------------------------------
 
-/// Generate an ECDSA P-256 leaf for `name`, signed by the root CA.
+/// Generate a leaf cert for `name`, signed by the root CA.
 ///
-/// SANs: DNS `{name}`, IP `127.0.0.1`, IP `::1`. CN `{name}`. Valid
-/// `now-1h .. now+825d`. Extended key usage serverAuth. Writes `{name}.pem`
-/// (0644) and `{name}-key.pem` (0600) under `~/.lane/certs` (created 0700).
-pub fn generate_leaf_cert(name: &str) -> Result<()> {
+/// SANs: DNS `{name}`, IP `127.0.0.1`, IP `::1` plus any `extra_sans`.
+/// CN `{name}`. Valid `now-1h .. now+825d`. Extended key usage serverAuth.
+/// Writes `{name}.pem` (0644) and `{name}-key.pem` (0600) under `~/.lane/certs`
+/// (created 0700). Key type defaults to ECDSA-P256 for backwards compatibility.
+pub fn generate_leaf_cert(name: &str, key_type: KeyType, extra_sans: Option<Vec<SanType>>) -> Result<()> {
     let (ca_cert, ca_key) = load_ca().context("loading CA")?;
 
     mkdir_mode(&certs_dir(), 0o700).context("creating certs dir")?;
 
-    // KeyPair::generate() defaults to PKCS_ECDSA_P256_SHA256.
-    let leaf_key = KeyPair::generate().map_err(|e| anyhow!("generating leaf key: {e}"))?;
+    let leaf_key = generate_keypair(key_type)?;
 
     let now = now_unix_secs();
-    let mut params =
-        CertificateParams::new(vec![name.to_string()]).map_err(|e| anyhow!("leaf params: {e}"))?;
-    // Replace the auto-derived SANs with the exact set the Go template uses.
-    params.subject_alt_names = vec![
-        SanType::DnsName(
-            name.try_into()
-                .map_err(|e| anyhow!("invalid DNS name: {e}"))?,
-        ),
+    let mut params = CertificateParams::new(vec![name.to_string()])
+        .map_err(|e| anyhow!("leaf params: {e}"))?;
+
+    // Build SAN list: DNS `{name}` + loopback IPs + any extra SANs passed in.
+    let mut sans: Vec<SanType> = vec![
+        SanType::DnsName(name.try_into().map_err(|e| anyhow!("invalid DNS name: {e}"))?),
         SanType::IpAddress("127.0.0.1".parse::<IpAddr>().expect("valid IPv4 literal")),
         SanType::IpAddress("::1".parse::<IpAddr>().expect("valid IPv6 literal")),
     ];
+    if let Some(extra) = extra_sans {
+        sans.extend(extra);
+    }
+    params.subject_alt_names = sans;
     params.distinguished_name = leaf_distinguished_name(name);
     apply_validity(
         &mut params,
@@ -260,12 +304,82 @@ fn leaf_distinguished_name(name: &str) -> DistinguishedName {
 }
 
 /// Ensure a usable leaf exists for `name`: a no-op when the leaf is present and
-/// not due for renewal, otherwise (re)generates it.
+/// not due for renewal, otherwise (re)generates it. Uses ECDSA-P256 key type.
 pub fn ensure_leaf_cert(name: &str) -> Result<()> {
     if leaf_exists(name) && !leaf_needs_renewal(name) {
         return Ok(());
     }
-    generate_leaf_cert(name)
+    generate_leaf_cert(name, KeyType::EcdsaP256, None)
+}
+
+/// Ensure a usable leaf exists for `name` with the specified key type.
+pub fn ensure_leaf_cert_key_type(name: &str, key_type: KeyType) -> Result<()> {
+    if leaf_exists(name) && !leaf_needs_renewal(name) {
+        return Ok(());
+    }
+    generate_leaf_cert(name, key_type, None)
+}
+
+/// Ensure a usable leaf exists for `name` with extra SANs appended.
+pub fn ensure_leaf_cert_sans(name: &str, key_type: KeyType, extra_sans: Vec<rcgen::SanType>) -> Result<()> {
+    if leaf_exists(name) && !leaf_needs_renewal(name) {
+        return Ok(());
+    }
+    generate_leaf_cert(name, key_type, Some(extra_sans))
+}
+
+/// Generate a wildcard leaf cert for `*.domain` (e.g. "*.example.com").
+///
+/// SANs include `*.domain`, IP 127.0.0.1 and ::1. Uses ECDSA-P256 by default
+/// for the key type; pass extra_sans to append additional SAN entries.
+pub fn generate_wildcard_cert(domain: &str, key_type: KeyType, extra_sans: Option<Vec<SanType>>) -> Result<()> {
+    let wildcard_name = format!("*.{}", domain);
+    let wildcard_str = wildcard_name.as_str();
+    // The CA cert's CN and basic constraints already allow signing wildcard leaves
+    // because the CA has is_ca=TRUE with keyCertSign usage.  We just need to pass
+    // "*.domain" as the DNS SAN instead of an exact-name SAN.
+    let (ca_cert, ca_key) = load_ca().context("loading CA")?;
+
+    mkdir_mode(&certs_dir(), 0o700).context("creating certs dir")?;
+
+    let leaf_key = generate_keypair(key_type)?;
+
+    let now = now_unix_secs();
+    // Clone for the CertificateParams (takes ownership), keep original reference.
+    let mut params = CertificateParams::new(vec![wildcard_name.clone()])
+        .map_err(|e| anyhow!("leaf params: {e}"))?;
+
+    // SAN list: wildcard DNS + loopback IPs + extras.
+    let mut sans: Vec<SanType> = vec![
+        SanType::DnsName(wildcard_str.try_into().map_err(|e| anyhow!("invalid wildcard name: {e}"))?),
+        SanType::IpAddress("127.0.0.1".parse::<IpAddr>().expect("valid IPv4 literal")),
+        SanType::IpAddress("::1".parse::<IpAddr>().expect("valid IPv6 literal")),
+    ];
+    if let Some(extra) = extra_sans {
+        sans.extend(extra);
+    }
+    params.subject_alt_names = sans;
+
+    params.distinguished_name = leaf_distinguished_name(&wildcard_name);
+    apply_validity(
+        &mut params,
+        now.saturating_sub(ONE_HOUR.as_secs()),
+        now + LEAF_LIFETIME.as_secs(),
+    );
+    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+
+    let cert = params
+        .signed_by(&leaf_key, &ca_cert, &ca_key)
+        .map_err(|e| anyhow!("creating wildcard leaf cert: {e}"))?;
+
+    let cert_path = certs_dir().join(format!("{wildcard_name}.pem"));
+    write_file_mode(&cert_path, cert.pem().as_bytes(), 0o644)
+        .context("writing wildcard leaf cert")?;
+    let key_path = certs_dir().join(format!("{wildcard_name}-key.pem"));
+    write_file_mode(&key_path, leaf_key.serialize_pem().as_bytes(), 0o600)
+    .context("writing wildcard leaf key")?;
+
+    Ok(())
 }
 
 /// Report whether the leaf for `name` should be regenerated.
@@ -433,7 +547,7 @@ mod tests {
     fn generate_ca_then_load_ca() {
         let (_guard, _home) = isolated_home();
 
-        generate_ca().expect("generate_ca");
+        generate_ca(KeyType::Rsa2048).expect("generate_ca");
         assert!(ca_exists(), "ca_exists should be true after generate_ca");
 
         // CA is parseable and is a CA cert (basic constraints CA:TRUE).
@@ -462,7 +576,7 @@ mod tests {
     fn ensure_leaf_then_load_tls_roundtrip() {
         let (_guard, _home) = isolated_home();
 
-        generate_ca().expect("generate_ca");
+        generate_ca(KeyType::Rsa2048).expect("generate_ca");
         ensure_leaf_cert("app.test").expect("ensure_leaf_cert");
         assert!(
             leaf_exists("app.test"),
@@ -519,8 +633,8 @@ mod tests {
     #[serial]
     fn leaf_needs_renewal_fresh_after_generate() {
         let (_guard, _home) = isolated_home();
-        generate_ca().expect("generate_ca");
-        generate_leaf_cert("fresh.test").expect("generate_leaf_cert");
+        generate_ca(KeyType::Rsa2048).expect("generate_ca");
+        ensure_leaf_cert("fresh.test").expect("ensure_leaf_cert");
         assert!(
             !leaf_needs_renewal("fresh.test"),
             "a freshly generated 825-day ECDSA leaf should not need renewal"

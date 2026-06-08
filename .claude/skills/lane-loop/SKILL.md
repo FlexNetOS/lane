@@ -30,14 +30,17 @@ sequences it across a durable backlog and across sessions.
    never the default.
 8. **Bounded.** The external runner has a `MAX_ITERS` backstop and an always-checked `STOP` switch.
 9. **Stay 100% Rust-native.** rust-native-guard blocks drift; `.workflows/*.mjs` is the only exception.
+10. **Every cycle produces a checkpoint.** Phase 3 auto-handoff fires at cye end — truth lives on disk.
+11. **Policy gates enforce safe transitions.** Rules in `.lane-loop/policies/rules.toml` and hook gates in `.lane-loop/hooks/lane-events.toml` must pass before handoff/done; never weaken them.
 
 ## Phase 0: Context check (initial vs resume vs new)
 
 Decide the mode before acting:
 
 - **`_workspace/HANDOFF.md` exists** and the request is "resume / pick up / continue" →
-  **RESUME**: invoke the `session-relay` skill's RESUME entry point (it reads the committed handoff,
-  rebases if the base moved, runs the verify-on-resume baseline, resets `cycles_this_session=0`),
+  **RESUME**: invoke the `session-relay` skill's RESUME entry point, which internally delegates to
+  the `lane-session-resume` skill for checkpoint validation (against `.lane-loop/schemas/packet.schema.json`)
+  + cargo gate verification. The handoff rebases if the base moved, resets `cycles_this_session=0`,
   then continue this loop at the recorded in-flight item.
 - **`_workspace/backlog.md` exists, no resume requested** → continue the existing backlog from its
   current `- [ ]` item (don't re-DISCOVER and clobber it).
@@ -72,14 +75,20 @@ Seed `_workspace/loop_state.md` from the §template (see `references/loop-templa
 ## Phase 2: One iteration (the cycle body)
 
 1. **Read state** — `loop_state.md` + `backlog.md`.
-2. **Stop-checks (in order):**
-   - No `- [ ]` item left → run the **DONE gate** (Phase 3). If it passes, write `_workspace/DONE`
+2. **Fire PreCycle hook gate** (from `.lane-loop/hooks/lane-events.toml`):
+   ```
+   gates: backlog_item_exists, no_unresolved_deps, worktree_available_or_creatable, rust_native_guard_pass
+   ```
+   If `no_unresolved_deps` fails → skip this item, check next. If a new dependency appeared since the
+   last cycle, re-sort the backlog before proceeding.
+3. **Stop-checks (in order):**
+   - No `- [ ]` item left → run the **DONE gate** (Phase 4). If it passes, write `_workspace/DONE`
      and stop. If not, the unmet check becomes the next backlog item.
    - `cycles_this_session >= cycle_budget` → invoke `session-relay` **HAND OFF**, then stop (no
      wakeup).
    - A human wall is unavoidable for the top item → write `_workspace/NEEDS-HUMAN` (reason) and stop.
-3. **Pick the top `- [ ]` item** (respect dependency order). Mark it IN FLIGHT in `loop_state.md`.
-4. **Fresh worktree per item.** Re-sync and branch from `origin/main` (never develop on main):
+4. **Pick the top `- [ ]` item** (respect dependency order). Mark it IN FLIGHT in `loop_state.md`.
+5. **Fresh worktree per item.** Re-sync and branch from `origin/main` (never develop on main):
    ```bash
    git fetch origin && git checkout main && git pull --ff-only origin main
    git worktree add ../.worktrees/<item-slug>/lane -b <item-slug> origin/main
@@ -100,6 +109,29 @@ Seed `_workspace/loop_state.md` from the §template (see `references/loop-templa
    cargo clippy --all-targets -- -D warnings
    cargo test                       # 37+ in-module #[cfg(test)] suites
    ```
+   **Fire PostCycle hook:** Check `.lane-loop/hooks/lane-events.toml` → `PostCycle` event. Ensure all
+   gates (`fmt_green`, `clippy_green`, `test_green`) are satisfied before recording state. If any gate
+   fails, fix the failure before proceeding — do NOT mark the item complete with a failing gate.
+
+7. **Write state back:** mark the item `- [x]` (or `- [!] blocked: <reason>` with the reason),
+   bump `cycles_this_session` and `cycles_total`, update `last_item` / `status` / `last_update`.
+8. **Commit per cycle** on the item branch, area-prefixed subject, with a `[[tasks/<slug>]]` KB
+   wikilink when KB is available. Rebase onto `origin/main` before opening the item's PR so it can't
+   collide; open one PR per feature; then **arm auto-merge** instead of blocking on a CI poll:
+   ```bash
+   gh pr merge <n> --auto --merge      # lands hands-free once main's required checks pass
+   ```
+   `main` is protected with required status checks (`fmt + clippy`, `build + test (ubuntu-latest)`,
+   `build + test (macos-latest)`) and `delete_branch_on_merge`, so `--auto` waits for green, merges,
+   and deletes the branch — no human review required, no manual poll. **Still mark the item `- [x]`
+   only on a green local gate (step 6); do not mark it done merely because auto-merge is armed.** If
+   the PR can't auto-merge (e.g. the local gate was red, or required checks fail in CI), treat it as a
+   blocked item (`- [!]`) and surface it — never force-merge or weaken protection to land it.
+9. **Auto-handoff:** Run Phase 3 before advancing to the next item. Every cycle produces a durable
+   checkpoint (see `# phase 4` above). The committed `HANDOFF.md` is what survives a session restart,
+   not weave messages or cron.
+
+10. **Self-pace.** `ScheduleWakeup` to re-enter the next cycle. Because auto-merge lands the PR in the
    plus the `lane-verification` skill's acceptance checks for *this* item, exercised against the real
    binary in an isolated `HOME` where behavior is claimed. **Guardrail:** do NOT trust `lane doctor`'s
    CA-trust / port-forwarding probes until `FlexNetOS/lane#5` lands — verify those two via the real
@@ -124,7 +156,62 @@ Seed `_workspace/loop_state.md` from the §template (see `references/loop-templa
    depends on the previous PR being merged first (then poll `gh pr view <n> --json state`). At the
    budget, hand off instead of waking.
 
-## Phase 3: DONE gate (terminal — only with evidence)
+## Phase 3: Auto-handoff (end of each cycle — runs BEFORE moving to next item)
+
+After completing a backlog item AND before advancing to the next one, run auto-handoff. This is the
+harness upgrade from weave/sessions-handoff: **every cycle produces a durable checkpoint**, so even if
+the process crashes between cycles, the next session can resume from exactly where it left off.
+
+**Trigger:** At the end of Phase 2 step 7 (state write), before incrementing to the next item.
+
+### 3-1. Fire PreHandoff hook gate
+
+Load `.lane-loop/hooks/lane-events.toml` and check the `PreHandoff` event:
+```
+gates: drift_pass_or_soft_fail, handoff_file_integrity, no_dirty_tree
+```
+
+Run rust-native-guard on the changed files from this cycle. If `drift_status == hard_fail`, **STOP**
+— fix or document the drift before continuing. Never weaken a guard to make "pass".
+
+### 3-2. Spawn continuity-steward to write checkpoint
+
+```bash
+Agent(
+  subagent_type: continuity-steward,
+  prompt: "Write _workspace/HANDOFF.md for the completed item. Use .lane-loop/schemas/packet.schema.json as validation schema. Include drift_status (rust-native-guard result), cargo_gate status, and pipeline_stage of this item."
+)
+```
+
+Commit the checkpoint **immediately** — it is not a best-effort heartbeat; it is the authoritative
+resume signal:
+```bash
+git -C <worktree> add _workspace/HANDOFF.md _workspace/loop_state.md _workspace/backlog.md
+git -C <worktree> commit -m "chore(lane-loop): handoff after item completion + drift audit"
+```
+
+### 3-3. Validate the packet
+
+Check that `_workspace/HANDOFF.md` contains all required fields per `.lane-loop/schemas/packet.schema.json`:
+- `in_flight.pipeline_stage` is not empty
+- `cargo_gate` has fmt/clippy/test results
+- `drift_status` is present and not `hard_fail`
+- `base_sha` is the latest fetched
+
+If validation fails, rewrite via continuity-steward. **Do not proceed on a broken checkpoint.**
+
+### 3-4. Write sentinel and advance
+
+If `_workspace/DONE` already exists → do NOT overwrite. If backlog still has `- [ ]` items after
+this cycle completes:
+- Write `_workspace/HANDOFF.md` as sentinel (already done in step 3-2).
+- Continue to next item.
+
+If backlog is empty → proceed to Phase 4 (DONE gate) instead of advancing.
+
+---
+
+## Phase 4: DONE gate (terminal — only with evidence)
 
 Write `_workspace/DONE` **only** when the backlog has no `- [ ]` left AND every check below passes;
 put the evidence (commands + results) inside the file. Never write DONE on an unproven green.

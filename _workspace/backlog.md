@@ -52,3 +52,27 @@ POLICY (this session, no-human-in-loop): every cycle MUST open a PR and arm `gh 
 premature DONE. Leaving PRs uncreated/open is what caused cross-session conflicts; do not repeat it.
 Re-dedup against origin/main + open PRs at the top of EACH cycle.
 -->
+
+## Phase 7: Feature Inspiration (from external tool survey)
+
+Derived from study of ngrok, cloudflared, chisel, frp, mkcert, acme-lib, caddy, traefik
+and others in `docs/reference/repositories.md`. Each is a discrete backlog item for the
+lane-loop crew.
+
+### High priority (directly applicable to existing cert system)
+- [ ] Add `lane cert key-type` — let users choose RSA vs ECDSA-P256/P384 for CA or leaf (like mkcert `-key-type`). Current code always uses RSA-2048 CA + ECDSA-P256 leaf. Allowing `--key-type rsa|ecdsa-p256|ecdsa-p384` would serve users who need RSA for legacy compatibility. Affects: `src/cert/mod.rs::generate_ca()`, CLI layer.
+- [ ] Add `lane cert wildcard` — generate `*.test` wildcard certs (like mkcert `-hostname "*.test"`). Requires adding CA key with `keyCertSign` + `critical` basic constraints. Current code only does CN/SAN per-domain leaf certs. Affects: `src/cert/mod.rs::generate_leaf_cert()`, cert/trust paths, SAN generation logic.
+- [ ] Add `lane doctor --fix` — auto-heal common issues: reinstall CA trust to correct anchor, regenerate stale leaf certs (<30 days), clean orphan hosts entries, reload daemon if socket is stale but process alive. Affects: `src/doctor/mod.rs`, `src/cli/doctor.rs`.
+- [ ] Custom SAN support (`--san IP,...`) on start — let users add extra IP addresses or domains to a cert's SubjectAltName without regenerating the whole cert. Currently lane only adds the domain name itself plus 127.0.0.1 and ::1. Affects: `src/cert/mod.rs::generate_leaf_cert()` SAN construction, CLI argument parsing.
+
+### Medium priority
+- [ ] ACME integration (`--acme` flag on `start`) — use acme-lib to obtain a real public cert from Let's Encrypt for the local domain if DNS is configured. Would need DNS-01 or HTTP-01 challenge support. Affects: new `src/acme.rs` module, CLI `start` args, certificate generation flow.
+- [ ] Reverse tunnel syntax (`lane share R:3000:localhost:8080` — chisel-style) so users can expose specific upstream ports through the tunnel, not just the default port. Affects: `src/tunnel/protocol`, tunnel wire format, CLI args for share.
+- [ ] Service file generation (`lane install --service`) — drop a systemd unit or launchd plist for auto-starting the proxy daemon on boot. Current mechanism uses re-exec + setsid; add `systemctl enable` / launchd `plist` paths. Affects: new `src/service.rs` module, CLI `install` subcommand.
+- [ ] `lane config template` — generate project configs from templates (inspired by consul-template), useful for teams sharing `.lane.yaml` patterns. Affects: `src/config/project`, new `template` subcommand, template engine integration.
+
+### Lower priority (nice-to-have, larger scope)
+- [ ] Multi-hop tunnel support — proxy chains through intermediate hosts (gost-style). For developers behind NAT/firewall who need to share a local port through their company's VPN. Affects: tunnel wire protocol, client/server state machine.
+- [ ] Request inspection TUI (`lane inspect` — ngrok web UI pattern via IPC) — connect to running proxy daemon and view/modify request/response payloads. Affects: `src/daemon/socket`, new `inspect.rs` CLI module, TUI rendering (comfy-table or crossterm).
+
+<!-- Discovered 2026-06-08 from external tool survey in docs/reference/repositories.md -->

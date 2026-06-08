@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lane Loop Session State Machine",
+  "description": "Defines the lane-loop session lifecycle, transitions, and invariant gates. Adapted from weave/sessions-handoff session schema.",
+  "type": "object",
+  "required": ["schema", "state"],
+  "properties": {
+    "schema": { "const": "lane.loop.session.v1" },
+    "state": {
+      "type": "string",
+      "enum": [
+        "discovered",
+        "cycling",
+        "handoff_ready",
+        "handed_off",
+        "resuming",
+        "done",
+        "needs_human",
+        "stopped"
+      ]
+    },
+    "transitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from", "to", "trigger"],
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "trigger": { "type": "string", "description": "What causes the transition (e.g. 'cycle_budget_reached', 'backlog_empty')" },
+          "gate_before": { "type": "string", "description": "Required gate before transitioning (e.g. 'cargo_gate_green', 'drift_audit_pass')" }
+        }
+      }
+    },
+    "invariants": {
+      "type": "object",
+      "properties": {
+        "never_handoff_dirty_tree": { "type": "boolean" },
+        "never_resume_red_baseline": { "type": "boolean" },
+        "never_weaken_guard": { "type": "boolean" },
+        "exactly_one_sentinel": { "type": "boolean" }
+      }
+    }
+  },
+  "additionalProperties": false
+}
