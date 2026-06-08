@@ -171,6 +171,10 @@ offline with no account.
 
 ---
 
+## Related tools & references
+
+- **[External repository references](./reference/repositories.md)** — curated list of competing, complementary, and infrastructure tools worth studying for future lane features (tunneling, certs, dev-server HTTPS, daemon lifecycle). Each entry includes concrete features that could become backlog items.
+
 ## Credits and license
 
 `lane` is a port of **slim** by [Kamran Ahmed](https://github.com/kamranahmedse)

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lane Loop Handoff Packet",
+  "description": "Compact machine-readable handoff for the lane-loop autonomous runner. Adapted from weave/sessions-handoff packet schema — lane-specific, no Rust CLI.",
+  "type": "object",
+  "required": ["schema", "session_id", "backlog_status", "in_flight", "branch", "worktree", "base_sha", "drift_status", "cargo_gate"],
+  "properties": {
+    "schema": { "const": "lane.loop.packet.v1" },
+    "packet_id": { "type": "string", "description": "Auto-generated: PKT-YYYYMMDD-HHMMSS" },
+    "session_id": { "type": "string", "description": "Identifying this session/process" },
+    "written_utc": { "type": "string", "format": "date-time" },
+    "backlog_status": {
+      "type": "object",
+      "required": ["done", "total", "in_flight_count"],
+      "properties": {
+        "done": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 },
+        "in_flight_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "in_flight": {
+      "type": "object",
+      "properties": {
+        "item_text": { "type": "string" },
+        "pipeline_stage": { "type": "string", "enum": ["spec", "design", "implement", "verify", "test", "done"] },
+        "summary": { "type": "string" }
+      }
+    },
+    "branch": { "type": "string" },
+    "worktree": { "type": "string" },
+    "base_sha": { "type": "string", "description": "origin/main at handoff time" },
+    "drift_status": {
+      "type": "string",
+      "enum": ["pass", "soft_fail", "hard_fail"],
+      "description": "rust-native-guard result"
+    },
+    "cargo_gate": {
+      "type": "object",
+      "required": ["fmt", "clippy", "test"],
+      "properties": {
+        "fmt": { "type": "string", "enum": ["pass", "fail"] },
+        "clippy": { "type": "string", "enum": ["pass", "fail"] },
+        "test": { "type": "string", "enum": ["pass", "fail", "not_run"] },
+        "build_release": { "type": "string", "enum": ["pass", "fail", "not_run"] }
+      }
+    },
+    "completed_items": { "type": "array", "items": { "type": "string" } },
+    "decisions": { "type": "array", "items": { "type": "string" } },
+    "blockers": { "type": "array", "items": { "type": "string" } },
+    "next_command": { "type": "string" },
+    "open_prs": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

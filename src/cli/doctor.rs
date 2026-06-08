@@ -14,8 +14,25 @@ use crate::term;
 /// Mirrors Go's `doctorCmd.RunE`: `report := doctorRunFn(); printReport(report)`.
 /// With `--json`, the same `Report` is serialized as JSON (mirroring
 /// `lane list --json`) instead of the human checklist.
+/// With `--fix`, also attempts auto-heal for any `Fail` checks and prints a second
+/// report showing the post-fix status.
 pub async fn run(args: &super::DoctorArgs) -> Result<()> {
-    let report = doctor::run().await;
+    let mut report = doctor::run().await;
+
+    if args.fix && !report.results.is_empty() {
+        // Attempt to fix each Fail check in-place, update status for fixed checks.
+        for r in &mut report.results {
+            if r.status == Status::Fail {
+                if let Some(msg) = crate::doctor::auto_heal_check(r).await? {
+                    r.message.push_str(&format!("\n  -> fixed: {msg}"));
+                    r.status = Status::Pass;
+                } else {
+                    r.message.push_str("\n  -> no auto-heal available");
+                }
+            }
+        }
+    }
+
     if args.json {
         let data = serde_json::to_string_pretty(&report).context("marshaling JSON")?;
         println!("{data}");

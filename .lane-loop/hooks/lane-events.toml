@@ -1,0 +1,62 @@
+# Lane Loop Lifecycle Hooks
+# These hooks fire at defined points in the lane-loop cycle.
+# Adapted from weave/sessions-handoff hooks — lane-specific events.
+
+schema = "lane.loop.hooks.v1"
+
+[[hooks]]
+event = "LoopStart"
+description = "Before each cycle: verify baseline, load backlog state"
+action = "load_state"
+gates = ["cargo_gate_baseline_green", "drift_audit_pass"]
+
+[[hooks]]
+event = "PreCycle"
+description = "Before driving crew on an item: check deps, drift, worktree availability"
+action = "preready_check"
+gates = [
+  "backlog_item_exists",
+  "no_unresolved_deps",
+  "worktree_available_or_creatable",
+  "rust_native_guard_pass"
+]
+
+[[hooks]]
+event = "PostCycle"
+description = "After crew work completes: cargo gate, verification, state write"
+action = "cargo_gate_verify"
+gates = ["fmt_green", "clippy_green", "test_green"]
+
+[[hooks]]
+event = "PreHandoff"
+description = "Before session handoff: drift audit, checkpoint integrity check"
+action = "drift_audit"
+gates = [
+  "drift_pass_or_soft_fail",
+  "handoff_file_integrity",
+  "no_dirty_tree"
+]
+
+[[hooks]]
+event = "PostHandoff"
+description = "After handoff: sentinel write, commit"
+action = "commit_checkpoint"
+gates = []
+
+[[hooks]]
+event = "PreResume"
+description = "On resume: verify base is current, baseline green"
+action = "verify_resumable"
+gates = ["base_rebased_if_moved", "cargo_gate_baseline_green"]
+
+[[hooks]]
+event = "PreDoneGate"
+description = "Before DONE sentinel: full verification suite"
+action = "full_verify"
+gates = [
+  "cargo_build_release",
+  "all_tests_green",
+  "fmt_check_pass",
+  "clippy_clean",
+  "backlog_empty_or_all_blocked_surfaced"
+]
