@@ -439,12 +439,10 @@ pub async fn auto_heal_check(r: &CheckResult) -> anyhow::Result<Option<String>> 
             crate::cert::generate_ca(crate::cert::KeyType::Rsa2048)?;
             Ok(Some("regenerated root CA cert and key".to_string()))
         }
-        "CA trust" => {
-            match crate::cert::trust_ca() {
-                Ok(()) => Ok(Some("installed CA into OS trust store".to_string())),
-                Err(e) => Ok(Some(format!("install attempt: {e} (may require sudo)"))),
-            }
-        }
+        "CA trust" => match crate::cert::trust_ca() {
+            Ok(()) => Ok(Some("installed CA into OS trust store".to_string())),
+            Err(e) => Ok(Some(format!("install attempt: {e} (may require sudo)"))),
+        },
         name if name.starts_with("Hosts:") => {
             let domain = &name["Hosts: ".len()..];
             system::add_host(domain)?;

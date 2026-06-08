@@ -34,7 +34,9 @@ pub async fn run(args: &CertArgs) -> Result<()> {
     match &args.command {
         CertCommand::KeyType { key_type } => {
             let display = if let Some(s) = key_type {
-                s.parse::<crate::cert::KeyType>().map_err(|e| anyhow::anyhow!("{}", e)).map(|kt| kt.as_str())?
+                s.parse::<crate::cert::KeyType>()
+                    .map_err(|e| anyhow::anyhow!("{}", e))
+                    .map(|kt| kt.as_str())?
             } else {
                 "ecdsa-p256 (default)"
             };
@@ -42,7 +44,8 @@ pub async fn run(args: &CertArgs) -> Result<()> {
         }
         CertCommand::Wildcard { domain } => {
             if !crate::cert::ca_exists() {
-                crate::cert::generate_ca(crate::cert::KeyType::Rsa2048).context("generating root CA first")?;
+                crate::cert::generate_ca(crate::cert::KeyType::Rsa2048)
+                    .context("generating root CA first")?;
             }
             crate::cert::generate_wildcard_cert(domain, crate::cert::KeyType::EcdsaP256, None)?;
             println!("Wildcard cert for *.{domain} generated in ~/.lane/certs/");
