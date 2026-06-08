@@ -1,0 +1,36 @@
+# Lane Loop Policy Rules
+# Adapted from weave/sessions-handoff templates — lane-specific.
+# Enforced by the lane-loop orchestrator as hard gates before handoff and completion.
+
+[policy]
+schema = "lane.loop.policy.v1"
+
+[hard_gates]
+require_cargo_gate_before_handoff = true      # fmt + clippy + test must be green
+require_drift_audit_before_handoff = true      # rust-native-guard must pass
+require_checkpoint_before_handoff = true        # HANDOFF.md must exist and be committed
+require_clean_tree_before_handoff = true        # never hand off dirty worktree
+allow_test_waiver = false                       # lane: no test waivers; every item verified
+require_exactly_one_sentinel = true             # DONE / NEEDS-HUMAN / STOP / HANDOFF
+
+[drift]
+block_rust_native_drift = true                  # .js/.mjs/.ts/.py/.go/.omc/.ecc in src/ → block
+block_architecture_contract_violation = true    # ARCHITECTURE.md public API changes require design phase
+check_slim_rename_consistency = true            # verify lane renames land everywhere
+
+[policy.blocked_commands]
+patterns = [
+  "git reset --hard",
+  "git push --force",
+  "git clean -fdx",
+  "rm -rf /",
+  "sudo rm",
+  "chmod -R 777",
+  "curl * | sh",
+  "wget * | sh"
+]
+
+[unattended]
+require_LANE_APPLY = true                       # LANE_APPLY=1 required for unattended apply
+max_iterations_default = 20                     # backstop to prevent runaway loops
+default_approval_mode = "yolo"                  # NO HUMAN IN THE LOOP; retry transient failures

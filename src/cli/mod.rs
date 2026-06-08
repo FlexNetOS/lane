@@ -12,6 +12,7 @@ use clap::{Args, Parser, Subcommand};
 use crate::config::{self, Domain};
 
 mod completions;
+mod cert;
 mod doctor;
 mod domain;
 mod down;
@@ -76,6 +77,8 @@ enum Commands {
     Logout,
     /// Manage custom domains
     Domain(DomainArgs),
+    /// Manage certificates (key types, wildcard certs)
+    Cert(cert::CertArgs),
     /// Diagnose setup issues
     Doctor(DoctorArgs),
     /// Remove all lane data and configuration
@@ -114,6 +117,9 @@ pub(crate) struct StartArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+    /// Extra SAN entries for the leaf cert (comma-separated IPs or DNS names), e.g. `10.0.0.1,extra.test`
+    #[arg(long)]
+    pub san: Option<String>,
 }
 
 #[derive(Args)]
@@ -157,6 +163,9 @@ pub(crate) struct DoctorArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+    /// Auto-heal any `Fail` issues found by the diagnostic checks
+    #[arg(long)]
+    pub fix: bool,
 }
 
 #[derive(Args)]
@@ -273,6 +282,7 @@ pub async fn run() -> Result<()> {
         Commands::Logout => logout::run().await,
         Commands::Domain(a) => domain::run(&a).await,
         Commands::Doctor(a) => doctor::run(&a).await,
+        Commands::Cert(a) => cert::run(&a).await,
         Commands::Uninstall => uninstall::run().await,
         Commands::Upgrade => upgrade::run().await,
         Commands::Version(a) => version::run(&a).await,
