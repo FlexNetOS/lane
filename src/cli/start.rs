@@ -27,7 +27,8 @@ fn parse_extra_sans(raw: &str) -> Result<Vec<rcgen::SanType>> {
             ));
         } else {
             sans.push(rcgen::SanType::DnsName(
-                part.try_into().map_err(|e| anyhow!("invalid SAN DNS name: {e}"))?,
+                part.try_into()
+                    .map_err(|e| anyhow!("invalid SAN DNS name: {e}"))?,
             ));
         }
     }
@@ -76,11 +77,7 @@ pub async fn run(args: &super::StartArgs) -> Result<()> {
 
     // Generate (or renew) the leaf cert.  If --san was provided, append those
     // extra SAN entries alongside the default set.
-    let extra_sans = args
-        .san
-        .as_ref()
-        .map(|s| parse_extra_sans(s))
-        .transpose()?;
+    let extra_sans = args.san.as_ref().map(|s| parse_extra_sans(s)).transpose()?;
     if let Some(sans) = extra_sans {
         cert::ensure_leaf_cert_sans(&name, cert::KeyType::EcdsaP256, sans)
             .context("generating certificate with extra SANs")?;
