@@ -1,0 +1,10 @@
+{
+  "schema": "handoff.context_capsule.v1",
+  "project_name": "lane",
+  "role": "Rust CLI+daemon that maps custom local dev domains (myapp.test) to localhost ports via a TLS-terminating reverse proxy with locally trusted certs, plus a tunnel module for one-command public sharing. src/ has real proxy/cert/daemon/tunnel/doctor/setup subsystems behind a lib+bin crate.",
+  "plane": "network",
+  "tier": "B",
+  "northstar": "lane owns network engineering/control; obscura upgrades it with stealth agent web access.",
+  "next_command": "W2: lane+obscura seam ADR. Loop TERMINAL DONE 2026-06-05 (legitimate; recorded)",
+  "source": "ARCHITECTURE-TRUTH.md census 2026-06-12"
+}
