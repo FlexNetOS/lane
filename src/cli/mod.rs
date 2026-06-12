@@ -11,8 +11,8 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::config::{self, Domain};
 
-mod completions;
 mod cert;
+mod completions;
 mod doctor;
 mod domain;
 mod down;

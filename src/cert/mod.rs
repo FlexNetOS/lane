@@ -43,20 +43,37 @@ pub enum KeyType {
 }
 
 impl KeyType {
-    pub fn from_str(s: &str) -> Result<Self> {
-        match s.to_lowercase().as_str() {
-            "rsa" | "rsa2048" => Ok(KeyType::Rsa2048),
-            "ecdsa-p256" | "p256" | "p-256" => Ok(KeyType::EcdsaP256),
-            "ecdsa-p384" | "p384" | "p-384" => Ok(KeyType::EcdsaP384),
-            other => Err(anyhow!("unsupported key type: {other}; expected rsa, ecdsa-p256, or ecdsa-p384")),
-        }
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             KeyType::Rsa2048 => "rsa",
             KeyType::EcdsaP256 => "ecdsa-p256",
             KeyType::EcdsaP384 => "ecdsa-p384",
+        }
+    }
+}
+
+/// Error returned when parsing an invalid key type string.
+#[derive(Debug, Clone)]
+pub struct ParseKeyTypeError(pub String);
+impl std::fmt::Display for ParseKeyTypeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unsupported key type: {}; expected rsa, ecdsa-p256, or ecdsa-p384",
+            self.0
+        )
+    }
+}
+impl std::error::Error for ParseKeyTypeError {}
+
+impl std::str::FromStr for KeyType {
+    type Err = ParseKeyTypeError;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "rsa" | "rsa2048" => Ok(KeyType::Rsa2048),
+            "ecdsa-p256" | "p256" | "p-256" => Ok(KeyType::EcdsaP256),
+            "ecdsa-p384" | "p384" | "p-384" => Ok(KeyType::EcdsaP384),
+            other => Err(ParseKeyTypeError(other.to_string())),
         }
     }
 }
@@ -71,7 +88,8 @@ fn generate_keypair(key_type: KeyType) -> Result<KeyPair> {
             let mut rng = rand::thread_rng();
             let rsa_key = RsaPrivateKey::new(&mut rng, 2048)
                 .map_err(|e| anyhow!("generating RSA key: {e}"))?;
-            let pkcs8 = rsa_key.to_pkcs8_der()
+            let pkcs8 = rsa_key
+                .to_pkcs8_der()
                 .map_err(|e| anyhow!("encoding CA key: {e}"))?;
             KeyPair::try_from(pkcs8.as_bytes())
                 .map_err(|e| anyhow!("loading RSA key into rcgen: {e}"))
@@ -252,7 +270,11 @@ pub fn load_ca() -> Result<(rcgen::Certificate, KeyPair)> {
 /// CN `{name}`. Valid `now-1h .. now+825d`. Extended key usage serverAuth.
 /// Writes `{name}.pem` (0644) and `{name}-key.pem` (0600) under `~/.lane/certs`
 /// (created 0700). Key type defaults to ECDSA-P256 for backwards compatibility.
-pub fn generate_leaf_cert(name: &str, key_type: KeyType, extra_sans: Option<Vec<SanType>>) -> Result<()> {
+pub fn generate_leaf_cert(
+    name: &str,
+    key_type: KeyType,
+    extra_sans: Option<Vec<SanType>>,
+) -> Result<()> {
     let (ca_cert, ca_key) = load_ca().context("loading CA")?;
 
     mkdir_mode(&certs_dir(), 0o700).context("creating certs dir")?;
@@ -260,12 +282,15 @@ pub fn generate_leaf_cert(name: &str, key_type: KeyType, extra_sans: Option<Vec<
     let leaf_key = generate_keypair(key_type)?;
 
     let now = now_unix_secs();
-    let mut params = CertificateParams::new(vec![name.to_string()])
-        .map_err(|e| anyhow!("leaf params: {e}"))?;
+    let mut params =
+        CertificateParams::new(vec![name.to_string()]).map_err(|e| anyhow!("leaf params: {e}"))?;
 
     // Build SAN list: DNS `{name}` + loopback IPs + any extra SANs passed in.
     let mut sans: Vec<SanType> = vec![
-        SanType::DnsName(name.try_into().map_err(|e| anyhow!("invalid DNS name: {e}"))?),
+        SanType::DnsName(
+            name.try_into()
+                .map_err(|e| anyhow!("invalid DNS name: {e}"))?,
+        ),
         SanType::IpAddress("127.0.0.1".parse::<IpAddr>().expect("valid IPv4 literal")),
         SanType::IpAddress("::1".parse::<IpAddr>().expect("valid IPv6 literal")),
     ];
@@ -321,7 +346,11 @@ pub fn ensure_leaf_cert_key_type(name: &str, key_type: KeyType) -> Result<()> {
 }
 
 /// Ensure a usable leaf exists for `name` with extra SANs appended.
-pub fn ensure_leaf_cert_sans(name: &str, key_type: KeyType, extra_sans: Vec<rcgen::SanType>) -> Result<()> {
+pub fn ensure_leaf_cert_sans(
+    name: &str,
+    key_type: KeyType,
+    extra_sans: Vec<rcgen::SanType>,
+) -> Result<()> {
     if leaf_exists(name) && !leaf_needs_renewal(name) {
         return Ok(());
     }
@@ -332,7 +361,11 @@ pub fn ensure_leaf_cert_sans(name: &str, key_type: KeyType, extra_sans: Vec<rcge
 ///
 /// SANs include `*.domain`, IP 127.0.0.1 and ::1. Uses ECDSA-P256 by default
 /// for the key type; pass extra_sans to append additional SAN entries.
-pub fn generate_wildcard_cert(domain: &str, key_type: KeyType, extra_sans: Option<Vec<SanType>>) -> Result<()> {
+pub fn generate_wildcard_cert(
+    domain: &str,
+    key_type: KeyType,
+    extra_sans: Option<Vec<SanType>>,
+) -> Result<()> {
     let wildcard_name = format!("*.{}", domain);
     let wildcard_str = wildcard_name.as_str();
     // The CA cert's CN and basic constraints already allow signing wildcard leaves
@@ -351,7 +384,11 @@ pub fn generate_wildcard_cert(domain: &str, key_type: KeyType, extra_sans: Optio
 
     // SAN list: wildcard DNS + loopback IPs + extras.
     let mut sans: Vec<SanType> = vec![
-        SanType::DnsName(wildcard_str.try_into().map_err(|e| anyhow!("invalid wildcard name: {e}"))?),
+        SanType::DnsName(
+            wildcard_str
+                .try_into()
+                .map_err(|e| anyhow!("invalid wildcard name: {e}"))?,
+        ),
         SanType::IpAddress("127.0.0.1".parse::<IpAddr>().expect("valid IPv4 literal")),
         SanType::IpAddress("::1".parse::<IpAddr>().expect("valid IPv6 literal")),
     ];
@@ -377,7 +414,7 @@ pub fn generate_wildcard_cert(domain: &str, key_type: KeyType, extra_sans: Optio
         .context("writing wildcard leaf cert")?;
     let key_path = certs_dir().join(format!("{wildcard_name}-key.pem"));
     write_file_mode(&key_path, leaf_key.serialize_pem().as_bytes(), 0o600)
-    .context("writing wildcard leaf key")?;
+        .context("writing wildcard leaf key")?;
 
     Ok(())
 }

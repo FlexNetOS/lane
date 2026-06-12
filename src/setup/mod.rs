@@ -27,7 +27,9 @@ pub fn ensure_first_run() -> Result<()> {
         run_steps(vec![
             Step {
                 name: "Generating root CA".to_string(),
-                run: Box::new(|| cert::generate_ca(cert::KeyType::Rsa2048).map(|()| "done".to_string())),
+                run: Box::new(|| {
+                    cert::generate_ca(cert::KeyType::Rsa2048).map(|()| "done".to_string())
+                }),
                 interactive: false,
             },
             Step {
