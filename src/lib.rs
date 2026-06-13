@@ -10,6 +10,7 @@ pub mod config;
 pub mod daemon;
 pub mod doctor;
 pub mod httperr;
+pub mod inspect;
 pub mod log;
 pub mod osutil;
 pub mod project;
