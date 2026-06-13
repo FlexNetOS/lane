@@ -135,7 +135,7 @@ preserve these commands, flags, and aliases:
 
 This is a port, not a redesign. When `slim` and "the obviously nicer Rust way"
 disagree, **`slim` wins**, and the Go source under
-`/home/drdave/Downloads/slim-extract/slim-main` (read-only reference) is the source
+`/home/drdave/Downloads/tmp/router-lane/slim-extract/slim-main` (read-only reference) is the source
 of truth. In particular, preserve:
 
 - **Error message text.** Tests assert on substrings; keep human-facing strings

@@ -1,7 +1,7 @@
 # lane — Architecture & Port Contract
 
 `lane` is a faithful Rust port of the Go tool **slim** (`github.com/kamranahmedse/slim`).
-Original source (read-only reference): `/home/drdave/Downloads/slim-extract/slim-main`.
+Original source (read-only reference): `/home/drdave/Downloads/tmp/router-lane/slim-extract/slim-main`.
 
 This document is the **binding cross-module API contract**. Implementation agents MUST
 match the public signatures below so modules integrate without churn. When a Go behavior

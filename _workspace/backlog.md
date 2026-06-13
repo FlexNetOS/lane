@@ -59,13 +59,13 @@ Derived from study of ngrok, cloudflared, chisel, frp, mkcert, acme-lib, caddy, 
 and others in `docs/reference/repositories.md`. Each is a discrete backlog item for the
 lane-loop crew.
 
-### High priority (directly applicable to existing cert system)
-- [ ] Add `lane cert key-type` — let users choose RSA vs ECDSA-P256/P384 for CA or leaf (like mkcert `-key-type`). Current code always uses RSA-2048 CA + ECDSA-P256 leaf. Allowing `--key-type rsa|ecdsa-p256|ecdsa-p384` would serve users who need RSA for legacy compatibility. Affects: `src/cert/mod.rs::generate_ca()`, CLI layer.
-- [ ] Add `lane cert wildcard` — generate `*.test` wildcard certs (like mkcert `-hostname "*.test"`). Requires adding CA key with `keyCertSign` + `critical` basic constraints. Current code only does CN/SAN per-domain leaf certs. Affects: `src/cert/mod.rs::generate_leaf_cert()`, cert/trust paths, SAN generation logic.
-- [ ] Add `lane doctor --fix` — auto-heal common issues: reinstall CA trust to correct anchor, regenerate stale leaf certs (<30 days), clean orphan hosts entries, reload daemon if socket is stale but process alive. Affects: `src/doctor/mod.rs`, `src/cli/doctor.rs`.
-- [ ] Custom SAN support (`--san IP,...`) on start — let users add extra IP addresses or domains to a cert's SubjectAltName without regenerating the whole cert. Currently lane only adds the domain name itself plus 127.0.0.1 and ::1. Affects: `src/cert/mod.rs::generate_leaf_cert()` SAN construction, CLI argument parsing.
+### High priority — Round A ✅ ALL SHIPPED (PR #26, fmt-merge #27; verified in code 2026-06-13)
+- [x] Add `lane cert key-type` — choose RSA vs ECDSA-P256/P384 (like mkcert `-key-type`). SHIPPED: `KeyType::{Rsa2048,EcdsaP256,EcdsaP384}` enum in `src/cert/mod.rs` + CLI `src/cli/cert.rs`.
+- [x] Add `lane cert wildcard` — generate `*.test` wildcard certs (like mkcert `-hostname "*.test"`). SHIPPED: `generate_wildcard_cert()` + `lane cert wildcard <domain>` subcommand.
+- [x] Add `lane doctor --fix` — auto-heal CA trust / stale leaves / orphan hosts / stale socket. SHIPPED: auto-regenerate CA/trust/hosts/leaf on Fail checks (`src/doctor/mod.rs`, `src/cli/doctor.rs`).
+- [x] Custom SAN support (`--san IP,...`) on start. SHIPPED: `parse_extra_sans()` with IP/DNS auto-detection (`src/cli/start.rs`, `src/cert/mod.rs`).
 
-### Medium priority
+### Medium priority — Round B (NOT started; each ~1 crate)
 - [ ] ACME integration (`--acme` flag on `start`) — use acme-lib to obtain a real public cert from Let's Encrypt for the local domain if DNS is configured. Would need DNS-01 or HTTP-01 challenge support. Affects: new `src/acme.rs` module, CLI `start` args, certificate generation flow.
 - [ ] Reverse tunnel syntax (`lane share R:3000:localhost:8080` — chisel-style) so users can expose specific upstream ports through the tunnel, not just the default port. Affects: `src/tunnel/protocol`, tunnel wire format, CLI args for share.
 - [ ] Service file generation (`lane install --service`) — drop a systemd unit or launchd plist for auto-starting the proxy daemon on boot. Current mechanism uses re-exec + setsid; add `systemctl enable` / launchd `plist` paths. Affects: new `src/service.rs` module, CLI `install` subcommand.
@@ -76,3 +76,31 @@ lane-loop crew.
 - [ ] Request inspection TUI (`lane inspect` — ngrok web UI pattern via IPC) — connect to running proxy daemon and view/modify request/response payloads. Affects: `src/daemon/socket`, new `inspect.rs` CLI module, TUI rendering (comfy-table or crossterm).
 
 <!-- Discovered 2026-06-08 from external tool survey in docs/reference/repositories.md -->
+
+## Phase 8: The W2 network mandate (STRATEGIC — the "bigger than the slim port" vision)
+
+Surfaced 2026-06-13 by tracing lane's intent/vision across the meta census
+(`ARCHITECTURE-TRUTH.md`, `NORTH-STAR.md`, `UPGRADE-MISSION-PROMPT.md`, `GAP-REGISTER.md`,
+2026-06-12) + lane's `.handoff/context/capsule.json`. lane is the estate's **network plane
+(Tier B)**; north-star = *"lane owns network engineering/control; obscura upgrades it with
+stealth agent web access."* Full trace: [`docs/VISION.md`](../docs/VISION.md). This is
+**Phase-7's ceiling, not churn** — it is the chartered W2 workstream.
+
+- [~] **lane↔obscura seam ADR (W2 deliverable)** — DRAFTED 2026-06-13 at
+  `docs/adr/ADR-0001-lane-obscura-network-seam.md` (Proposed; recommends Option B = governed-egress
+  proxy seam). Awaiting owner ratification. → then implement.
+- [ ] **Governed `lane web` surface** (feature-gated `obscura`) — spawn obscura as a managed child,
+  pin its egress through lane, gate every op via a pure deny-by-default `webpolicy` (SSRF/loopback
+  validator), log via lane's access-log. Mirrors weave's WL-049/ADR-0002 seam shape. Affects: new
+  `src/web/` (+ `webpolicy`), CLI `lane web`, daemon dispatcher, config (`obscura_*`).
+- [ ] **lane relay — cross-machine networking (the STANDING WALL)** — close the census-flagged gap
+  (`NEEDS-HUMAN.md` "lane relay unfinished → cross-machine paths unreliable"; `GAP-REGISTER.md`
+  "lane relay (cross-machine) still unfinished — standing wall"). Reliable trusted connectivity across
+  the RuVector edge fleet (cloud→desktop→browser→P2P→ESP32). Needs its own ADR. Reference crates:
+  n0-computer/iroh + dumbpipe (QUIC/p2p), cloudflare/pingora (proxy core), rustdesk relay pattern —
+  see `network_hub/README.md` "Project Referances" + `docs/VISION.md`.
+- [ ] **Back the empty `network_hub` registry** + re-tag obscura C→B once it carries real integration.
+
+NOTE: Phase 8 items are NOT autonomous-loop churn candidates — the seam ADR needs owner ratification
+and the relay needs a design ADR first. Round B (Phase 7 medium/lower) remains the unattended-loop
+backlog; Phase 8 is owner-gated strategic work.
