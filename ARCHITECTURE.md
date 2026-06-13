@@ -145,7 +145,9 @@ pub fn find() -> Result<PathBuf>;                  // walk up from cwd to root l
 pub fn load(path: &Path) -> Result<ProjectConfig>; // parse + normalize_domain each service.domain
 pub fn discover() -> Result<(ProjectConfig, PathBuf)>;
 impl ProjectConfig { pub fn validate(&self) -> Result<()>; } // non-empty, log_mode, per-service validate, dup domain check, route validate
+pub fn render_template(domain: &str, port: u16) -> String;  // lane-original (Phase 7): commented starter .lane.yaml (round-trips through load)
 ```
+CLI: `lane config template [--domain <d>] [--port <p>] [--output <path>] [--force]` (`src/cli/config.rs`).
 
 ## src/osutil  (⇐ internal/osutil)
 
