@@ -356,7 +356,7 @@ Expose a local port to the internet via a `lane.show` tunnel. Requires `lane log
 ### Synopsis
 
 ```
-lane share --port <port> [--subdomain <name> | --domain <fqdn>] [--password <secret>] [--ttl <duration>] [--json]
+lane share (--port <port> | R:[remotePort:][localHost:]localPort) [--subdomain <name> | --domain <fqdn>] [--password <secret>] [--ttl <duration>] [--json]
 ```
 
 ### Description
@@ -382,15 +382,25 @@ notice listing the free vs. Pro options instead of erroring.
 > the client and wire protocol. Point it at a compatible server with the environment
 > variables above.
 
+By default the tunnel forwards public requests to `http://localhost:<--port>`. A **reverse-tunnel
+forward spec** (chisel-style positional argument) instead forwards to a specific local upstream
+`host:port` — e.g. `lane share R:3000:localhost:8080` forwards to `localhost:8080`. Because lane's
+hosted tunnel assigns the public endpoint by URL / `--subdomain` / `--domain`, the `remotePort`
+number is **advisory** (lane maps it to the assigned URL); the honored part is the local
+`host:port`. Exactly one of `--port` or a forward spec must be given (`cannot use --port and a
+forward spec together` / `specify a local port: ...`).
+
 ### Arguments
 
-_None._
+| Argument | Type | Meaning |
+|---|---|---|
+| `FORWARD` | string | Reverse-tunnel forward spec `R:[remotePort:][localHost:]localPort`. Accepts `R:8080` (→ `localhost:8080`), `R:127.0.0.1:9000`, or `R:3000:localhost:8080`. Mutually exclusive with `--port`. |
 
 ### Flags
 
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
-| `--port` | `-p` | int | _(required)_ | Local port to expose. Must be 1–65535 (`invalid port <n>: must be between 1 and 65535`). |
+| `--port` | `-p` | int | _(see above)_ | Local port to expose (forwards to `localhost:<port>`). Must be 1–65535 (`invalid port <n>: must be between 1 and 65535`). Use this **or** a `FORWARD` spec. |
 | `--subdomain` | | string | _(random)_ | Request a vanity subdomain, yielding `https://<name>.lane.show`. Pro feature; screened against a brand blocklist. Mutually exclusive with `--domain`. |
 | `--password` | | string | _(none)_ | Require this password for tunnel access. Pro feature. |
 | `--ttl` | | duration | _(none)_ | Tunnel time-to-live, e.g. `30m`, `1h`. Free tier: max 1h. Pro: unlimited. When elapsed, the tunnel disconnects automatically. |
@@ -406,6 +416,9 @@ lane share --port 3000 --password secret            # password protected
 lane share --port 3000 --ttl 30m                    # auto-expire after 30 minutes
 lane share --port 3000 --domain myapp.example.com   # custom domain
 lane share --port 3000 --json                       # NDJSON stream; capture the public URL
+lane share R:8080                                   # reverse-tunnel: forward to localhost:8080
+lane share R:3000:localhost:8080                     # chisel-style: remote 3000 (advisory) → localhost:8080
+lane share R:127.0.0.1:9000 --subdomain demo         # forward to 127.0.0.1:9000 on a vanity subdomain
 ```
 
 ---

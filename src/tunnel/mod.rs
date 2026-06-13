@@ -9,8 +9,10 @@
 //! local server is unreachable.
 
 pub mod client;
+pub mod forward;
 pub mod pages;
 pub mod subdomain;
 
 pub use client::{Client, ClientOptions, RequestEvent};
+pub use forward::ForwardSpec;
 pub use subdomain::validate_subdomain;

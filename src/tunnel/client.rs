@@ -9,9 +9,11 @@
 //!    message, reads the JSON registration response, then spawns a background
 //!    read loop and returns the public URL.
 //! 2. The read loop receives binary frames, each carrying a `request_id` and the
-//!    raw HTTP request bytes; it decodes them, forwards the request to
-//!    `http://localhost:{local_port}`, serializes the response, and writes it
-//!    back as a binary frame guarded by a shared write mutex.
+//!    raw HTTP request bytes; it decodes them, forwards the request to the local
+//!    upstream `http://{local_host}:{local_port}` (`local_host` defaults to
+//!    `localhost`; a reverse-tunnel forward spec can point it elsewhere),
+//!    serializes the response, and writes it back as a binary frame guarded by a
+//!    shared write mutex.
 //! 3. A 20s ping keeps the connection alive; lost connections reconnect with
 //!    exponential backoff (1s..30s). Close codes 4000 (TTL reached) and 4001
 //!    (dropped) stop the loop, as does a registration failure.
@@ -63,6 +65,9 @@ pub struct ClientOptions {
     pub token: String,
     pub subdomain: String,
     pub domain: String,
+    /// Local upstream host requests are forwarded to. Empty ⇒ `localhost`
+    /// (set non-empty by a reverse-tunnel forward spec; see [`super::forward`]).
+    pub local_host: String,
     pub local_port: u16,
     pub password: String,
     pub ttl: Option<Duration>,
@@ -133,9 +138,15 @@ impl Client {
         let dial_cfg = self.dial_cfg.clone();
         let on_request = self.opts.on_request.take();
         let local_port = self.opts.local_port;
+        // Empty host ⇒ localhost (the default; a reverse-tunnel forward spec sets it).
+        let local_host: Arc<str> = Arc::from(if self.opts.local_host.is_empty() {
+            "localhost"
+        } else {
+            self.opts.local_host.as_str()
+        });
 
         tokio::spawn(async move {
-            read_loop(dial_cfg, local_port, on_request, sink, source).await;
+            read_loop(dial_cfg, local_host, local_port, on_request, sink, source).await;
         });
 
         Ok(url)
@@ -259,6 +270,7 @@ async fn dial(cfg: &DialConfig) -> Result<(WsStream, String)> {
 /// `Client.readLoop`.
 async fn read_loop(
     cfg: Arc<DialConfig>,
+    local_host: Arc<str>,
     local_port: u16,
     on_request: Option<Box<dyn Fn(RequestEvent) + Send + Sync>>,
     mut sink: Arc<Mutex<WsSink>>,
@@ -268,8 +280,14 @@ async fn read_loop(
     let mut backoff = Duration::from_secs(1);
 
     loop {
-        let close_code =
-            read_messages(local_port, on_request.clone(), sink.clone(), &mut source).await;
+        let close_code = read_messages(
+            local_host.clone(),
+            local_port,
+            on_request.clone(),
+            sink.clone(),
+            &mut source,
+        )
+        .await;
 
         let reason = match close_code {
             // The connection closed cleanly with no error condition.
@@ -337,6 +355,7 @@ enum ReadOutcome {
 /// Read and dispatch binary frames until the connection drops. Spawns a 20s
 /// ping task for the lifetime of the session. Mirrors Go's `readMessages`.
 async fn read_messages(
+    local_host: Arc<str>,
     local_port: u16,
     on_request: SharedOnRequest,
     sink: Arc<Mutex<WsSink>>,
@@ -388,8 +407,12 @@ async fn read_messages(
                 let client = http_client.clone();
                 let sink = sink.clone();
                 let on_request = on_request.clone();
+                let local_host = local_host.clone();
                 tokio::spawn(async move {
-                    handle_request(client, local_port, on_request, sink, request_id, req).await;
+                    handle_request(
+                        client, local_host, local_port, on_request, sink, request_id, req,
+                    )
+                    .await;
                 });
             }
             Some(Ok(Message::Close(frame))) => {
@@ -429,6 +452,7 @@ fn classify_error(err: tokio_tungstenite::tungstenite::Error) -> ReadOutcome {
 /// Mirrors Go's `handleRequest`.
 async fn handle_request(
     http_client: reqwest::Client,
+    local_host: Arc<str>,
     local_port: u16,
     on_request: SharedOnRequest,
     sink: Arc<Mutex<WsSink>>,
@@ -440,7 +464,7 @@ async fn handle_request(
     let path_for_event = req.uri.split('?').next().unwrap_or(&req.uri).to_string();
     let method_for_event = req.method.clone();
 
-    let local_url = format!("http://localhost:{}{}", local_port, req.uri);
+    let local_url = format!("http://{}:{}{}", local_host, local_port, req.uri);
 
     let method = match reqwest::Method::from_bytes(req.method.as_bytes()) {
         Ok(m) => m,
@@ -485,7 +509,7 @@ async fn handle_request(
             }
         }
         Err(e) => {
-            log::error(&format!("forwarding to localhost:{local_port}: {e}"));
+            log::error(&format!("forwarding to {local_host}:{local_port}: {e}"));
             error_response(local_port, &e.to_string())
         }
     };

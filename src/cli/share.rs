@@ -1,8 +1,11 @@
-//! `lane share` — expose a local port via a lane.show tunnel.
+//! `lane share` — expose a local upstream via a lane.show tunnel.
 //!
-//! Faithful port of `cmd/share.go`. Validates the port and subdomain, requires
-//! authentication, opens a tunnel [`Client`], and prints the public URL plus a
-//! live per-request log until interrupted with Ctrl+C.
+//! Faithful port of `cmd/share.go`, plus a lane-original reverse-tunnel forward
+//! spec (`R:[remotePort:][localHost:]localPort`, chisel-style) so the tunnel can
+//! forward to a specific local upstream instead of just `localhost:<--port>`.
+//! Validates the target and subdomain, requires authentication, opens a tunnel
+//! [`Client`], and prints the public URL plus a live per-request log until
+//! interrupted with Ctrl+C.
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Local;
@@ -11,17 +14,37 @@ use crate::auth;
 use crate::config;
 use crate::log;
 use crate::term;
-use crate::tunnel::{self, Client, ClientOptions, RequestEvent};
+use crate::tunnel::{self, Client, ClientOptions, ForwardSpec, RequestEvent};
+
+/// Resolve the local upstream `(host, port)` from either `--port` (host =
+/// `localhost`) or a reverse-tunnel forward spec, enforcing exactly-one. Pure,
+/// so it is unit-testable without spawning the binary.
+fn resolve_target(port: Option<u16>, forward: Option<&str>) -> Result<(String, u16)> {
+    match (port, forward) {
+        (Some(_), Some(_)) => Err(anyhow!(
+            "cannot use --port and a forward spec together; pick one"
+        )),
+        (None, None) => Err(anyhow!(
+            "specify a local port: --port <PORT> or a forward spec (e.g. R:3000:localhost:8080)"
+        )),
+        (Some(p), None) => {
+            // Go validated `port < 1 || port > 65535`; here `u16` makes only 0
+            // reachable — keep the exact message text for parity.
+            if p < 1 {
+                return Err(anyhow!("invalid port {p}: must be between 1 and 65535"));
+            }
+            Ok(("localhost".to_string(), p))
+        }
+        (None, Some(spec)) => {
+            let f: ForwardSpec = spec.parse()?;
+            Ok((f.local_host, f.local_port))
+        }
+    }
+}
 
 /// Run the `share` command.
 pub async fn run(args: &super::ShareArgs) -> Result<()> {
-    let port = args.port;
-    // Note: `port` is a `u16`, so it is always within 1..=65535 except for 0.
-    // Go validated `port < 1 || port > 65535` against an `int`; here only 0 is
-    // reachable, but we keep the exact message text for parity.
-    if port < 1 {
-        return Err(anyhow!("invalid port {port}: must be between 1 and 65535"));
-    }
+    let (local_host, port) = resolve_target(args.port, args.forward.as_deref())?;
 
     let subdomain = args.subdomain.clone().unwrap_or_default();
     let share_domain = args.domain.clone().unwrap_or_default();
@@ -63,6 +86,7 @@ pub async fn run(args: &super::ShareArgs) -> Result<()> {
         token,
         subdomain: subdomain.clone(),
         domain: share_domain.clone(),
+        local_host: local_host.clone(),
         local_port: port,
         password: password.clone(),
         ttl: args.ttl,
@@ -132,11 +156,11 @@ pub async fn run(args: &super::ShareArgs) -> Result<()> {
         // Emit the `connected` event carrying the public URL (the automation value).
         println!(
             "{}",
-            share_connected_json(&url, &domain_url, port, &password)
+            share_connected_json(&url, &domain_url, &local_host, port, &password)
         );
     } else {
         let arrow = term::dim("→");
-        let target = term::dim(format!("localhost:{port}"));
+        let target = term::dim(format!("{local_host}:{port}"));
 
         println!();
         println!(
@@ -181,11 +205,13 @@ fn share_request_json(e: &RequestEvent) -> String {
     .to_string()
 }
 
-/// The `connected` event for `lane share --json`: the public URL, target port,
-/// and (when set) the custom-domain URL and access password.
+/// The `connected` event for `lane share --json`: the public URL, the local
+/// upstream `host:port`, and (when set) the custom-domain URL and access
+/// password.
 fn share_connected_json(
     url: &str,
     domain_url: &str,
+    local_host: &str,
     port: u16,
     password: &str,
 ) -> serde_json::Value {
@@ -193,7 +219,7 @@ fn share_connected_json(
         "event": "connected",
         "url": url,
         "port": port,
-        "local": format!("localhost:{port}"),
+        "local": format!("{local_host}:{port}"),
     });
     if !domain_url.is_empty() {
         v["domain_url"] = serde_json::json!(domain_url);
@@ -213,7 +239,7 @@ mod tests {
     // and password are present only when set.
     #[test]
     fn share_connected_json_shape() {
-        let bare = share_connected_json("https://abc.lane.show", "", 3000, "");
+        let bare = share_connected_json("https://abc.lane.show", "", "localhost", 3000, "");
         assert_eq!(bare["event"], "connected");
         assert_eq!(bare["url"], "https://abc.lane.show");
         assert_eq!(bare["port"], 3000);
@@ -227,10 +253,55 @@ mod tests {
             "password omitted when empty"
         );
 
-        let full =
-            share_connected_json("https://abc.lane.show", "https://myapp.com", 8080, "secret");
+        let full = share_connected_json(
+            "https://abc.lane.show",
+            "https://myapp.com",
+            "localhost",
+            8080,
+            "secret",
+        );
         assert_eq!(full["domain_url"], "https://myapp.com");
         assert_eq!(full["password"], "secret");
+
+        // A reverse-tunnel forward to a non-default upstream is reflected in `local`.
+        let fwd = share_connected_json("https://abc.lane.show", "", "127.0.0.1", 9000, "");
+        assert_eq!(fwd["local"], "127.0.0.1:9000");
+        assert_eq!(fwd["port"], 9000);
+    }
+
+    #[test]
+    fn resolve_target_from_port() {
+        assert_eq!(
+            resolve_target(Some(3000), None).unwrap(),
+            ("localhost".to_string(), 3000)
+        );
+    }
+
+    #[test]
+    fn resolve_target_from_forward_spec() {
+        assert_eq!(
+            resolve_target(None, Some("R:3000:localhost:8080")).unwrap(),
+            ("localhost".to_string(), 8080)
+        );
+        assert_eq!(
+            resolve_target(None, Some("R:127.0.0.1:9000")).unwrap(),
+            ("127.0.0.1".to_string(), 9000)
+        );
+    }
+
+    #[test]
+    fn resolve_target_rejects_both_and_neither() {
+        assert!(resolve_target(Some(3000), Some("R:8080")).is_err());
+        assert!(resolve_target(None, None).is_err());
+    }
+
+    #[test]
+    fn resolve_target_rejects_port_zero_with_parity_message() {
+        let err = resolve_target(Some(0), None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "invalid port 0: must be between 1 and 65535"
+        );
     }
 
     // Each proxied request is a compact single-line `request` NDJSON object.
