@@ -690,6 +690,60 @@ lane update     # alias
 
 ---
 
+## install
+
+Install an OS service that auto-starts the `lane` daemon at login/boot.
+
+### Synopsis
+
+```
+lane install --service [--enable] [--print] [--json]
+```
+
+### Description
+
+`lane install --service` writes a **user-level** service definition for this platform — a systemd
+user unit (`~/.config/systemd/user/lane.service`) on Linux, or a launchd LaunchAgent
+(`~/Library/LaunchAgents/com.lane.daemon.plist`) on macOS. The unit's start command re-execs the
+`lane` binary in daemon mode (`_LANE_DAEMON=1`), exactly as the detached daemon does, with
+restart-on-failure. No root is required (the daemon elevates per privileged op as usual).
+
+- `--enable` also enables and starts the service now (`systemctl --user enable --now lane.service`
+  / `launchctl load <path>`).
+- `--print` renders the unit to stdout and writes nothing (useful for review or custom install).
+- Without `--service`, the command errors — it is currently the only supported install target.
+
+### Flags
+
+| Flag | Description |
+|---|---|
+| `--service` | Install the lane daemon service unit (required). |
+| `--enable` | Enable and start the service immediately after writing it. |
+| `--print` | Print the unit to stdout instead of installing it. |
+| `--json` | Emit `{manager, path, written, enabled}` instead of human output. |
+
+### JSON
+
+`--json` prints an object:
+
+```json
+{
+  "manager": "systemd (user unit)",
+  "path": "/home/you/.config/systemd/user/lane.service",
+  "written": true,
+  "enabled": false
+}
+```
+
+### Examples
+
+```bash
+lane install --service              # write the service unit
+lane install --service --enable     # write it and start it now
+lane install --service --print      # preview the unit without installing
+lane install --service --json       # machine-readable result
+```
+
 ## uninstall
 
 Remove all `lane` data, configuration, and the binary itself.

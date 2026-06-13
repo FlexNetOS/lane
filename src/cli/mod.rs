@@ -16,6 +16,7 @@ mod completions;
 mod doctor;
 mod domain;
 mod down;
+mod install;
 mod list;
 mod login;
 mod logout;
@@ -81,6 +82,8 @@ enum Commands {
     Cert(cert::CertArgs),
     /// Diagnose setup issues
     Doctor(DoctorArgs),
+    /// Install an OS service that auto-starts the lane daemon at login/boot
+    Install(InstallArgs),
     /// Remove all lane data and configuration
     Uninstall,
     /// Upgrade lane to the latest version
@@ -170,6 +173,22 @@ pub(crate) struct DoctorArgs {
 
 #[derive(Args)]
 pub(crate) struct VersionArgs {
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct InstallArgs {
+    /// Install the OS service that auto-starts the lane daemon at login/boot
+    #[arg(long)]
+    pub service: bool,
+    /// Also enable and start the service immediately
+    #[arg(long)]
+    pub enable: bool,
+    /// Print the service unit to stdout instead of installing it
+    #[arg(long)]
+    pub print: bool,
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
@@ -283,6 +302,7 @@ pub async fn run() -> Result<()> {
         Commands::Domain(a) => domain::run(&a).await,
         Commands::Doctor(a) => doctor::run(&a).await,
         Commands::Cert(a) => cert::run(&a).await,
+        Commands::Install(a) => install::run(&a).await,
         Commands::Uninstall => uninstall::run().await,
         Commands::Upgrade => upgrade::run().await,
         Commands::Version(a) => version::run(&a).await,
