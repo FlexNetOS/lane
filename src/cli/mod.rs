@@ -129,6 +129,15 @@ pub(crate) struct StartArgs {
     /// Extra SAN entries for the leaf cert (comma-separated IPs or DNS names), e.g. `10.0.0.1,extra.test`
     #[arg(long)]
     pub san: Option<String>,
+    /// Obtain a real Let's Encrypt cert via ACME HTTP-01 (domain must be a public FQDN; needs --features acme)
+    #[arg(long)]
+    pub acme: bool,
+    /// Contact email for the ACME account (required with --acme)
+    #[arg(long = "acme-email")]
+    pub acme_email: Option<String>,
+    /// Use the Let's Encrypt staging environment for --acme
+    #[arg(long = "acme-staging")]
+    pub acme_staging: bool,
 }
 
 #[derive(Args)]

@@ -466,11 +466,19 @@ async fn serve_https(
 
 #[cfg(not(test))]
 fn ensure_leaf(name: &str) -> Result<()> {
+    // An ACME-issued (real public) cert takes precedence over the CA-signed
+    // leaf — don't generate/renew a CA leaf when one is present.
+    if crate::cert::acme_exists(name) {
+        return Ok(());
+    }
     crate::cert::ensure_leaf_cert(name)
 }
 
 #[cfg(not(test))]
 fn load_leaf(name: &str) -> Result<CertifiedKey> {
+    if crate::cert::acme_exists(name) {
+        return crate::cert::load_acme_tls(name);
+    }
     crate::cert::load_leaf_tls(name)
 }
 

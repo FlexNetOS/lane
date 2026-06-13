@@ -38,6 +38,11 @@ http-body-util = "0.1"
 bytes = "1"
 httparse = "1"
 
+# ACME / Let's Encrypt (feature-gated live issuance). instant-acme's default
+# features are hyper-rustls + ring (NOT aws-lc-rs), preserving lane's
+# one-rustls-ring invariant.
+instant-acme = { version = "0.7", optional = true }
+
 # TLS + certificates
 tokio-rustls = "0.26"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
@@ -97,3 +102,7 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
+
+[features]
+default = []
+acme = ["dep:instant-acme"]
