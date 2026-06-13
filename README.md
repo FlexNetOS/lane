@@ -21,6 +21,12 @@ app.loc           → localhost:4000
 locally-trusted CA) and full WebSocket passthrough for HMR. It's a complete Rust port of
 [`slim`](https://github.com/kamranahmedse/slim), rebuilt on `tokio` + `hyper` + `rustls`.
 
+> That is lane's *product* floor. Its larger charter — the **network plane** of the FlexNetOS
+> fleet (network engineering/control, upgraded by [obscura](https://github.com/FlexNetOS/obscura)
+> into governed agent web access, plus cross-machine relay) — is traced in
+> [`docs/VISION.md`](docs/VISION.md), with the integration designed in
+> [`docs/adr/ADR-0001-lane-obscura-network-seam.md`](docs/adr/ADR-0001-lane-obscura-network-seam.md).
+
 ## Install
 
 Build from source (requires Rust 1.82+):

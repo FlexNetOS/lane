@@ -4,6 +4,18 @@ Curated list of external GitHub repositories worth studying for future lane feat
 
 **Intentionally selective** — only the most relevant repos are listed, not an exhaustive survey.
 
+> **Two reference sets.** This file is lane's *product-feature* survey (tunneling / local-CA /
+> reverse-proxy / daemon UX). There is a second, **workspace-level** reference set for lane's
+> *fleet* mandate (the network plane: cross-machine relay + governed agent web access) in
+> [`network_hub/README.md`](../../../network_hub/README.md) under **"Project Referances: Network
+> tools for Native Rust Crates"** — pingora (proxy core), iroh/dumbpipe (QUIC/p2p relay), obscura
+> + agent-browser (stealth agent web access), ja4 (TLS fingerprinting), rustdesk (relay). See
+> [`docs/VISION.md`](../VISION.md) for how the two sets map to lane's two altitudes.
+>
+> **On-disk:** only the Go **slim** source is cloned locally, at
+> `/home/drdave/Downloads/tmp/router-lane/slim-extract/slim-main`. Every repo below is named-only
+> (inspiration targets, not vendored).
+
 ## Tunneling & Port Forwarding
 
 | Name | URL | Relevance to lane | Features Worth Stealing |

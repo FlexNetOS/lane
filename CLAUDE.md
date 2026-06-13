@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 (`myapp.test → localhost:3000`) plus one-command public tunneling (`lane share`). It is a
 **faithful Rust port of the Go tool [`slim`](https://github.com/kamranahmedse/slim)**, rebuilt on
 `tokio` + `hyper` + `rustls`. The original Go source is the behavioral source of truth (read-only
-reference, when present, at `/home/drdave/Downloads/slim-extract/slim-main`).
+reference, when present, at `/home/drdave/Downloads/tmp/router-lane/slim-extract/slim-main`).
 
 `ARCHITECTURE.md` is the **binding cross-module API contract** — public signatures and behavior are
 specified there so modules integrate without churn. Read it before changing any module's public API.
