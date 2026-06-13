@@ -609,6 +609,45 @@ lane domain remove tunnel.example.com --json
 
 ---
 
+## config
+
+Project-config helpers.
+
+### Synopsis
+
+```
+lane config template [--domain <name>] [--port <port>] [--output <path>] [--force]
+```
+
+### Description
+
+`lane config template` prints a commented starter `.lane.yaml` to stdout, seeded with one example
+service. The active lines load and validate as a real project config (the commented `routes` and
+options document the rest of the schema). Use it to scaffold a new project or share a `.lane.yaml`
+pattern across a team.
+
+- `--domain` / `--port` seed the example service (defaults `myapp` / `3000`).
+- `--output <path>` writes to a file instead of stdout; it refuses to overwrite an existing file
+  unless `--force` is given (`refusing to overwrite <path> (use --force)`).
+
+### Flags
+
+| Flag | Short | Type | Default | Meaning |
+|---|---|---|---|---|
+| `--domain` | | string | `myapp` | Example service domain. |
+| `--port` | | int | `3000` | Example service port (1–65535). |
+| `--output` | `-o` | path | _(stdout)_ | Write the template to this file. |
+| `--force` | | bool | `false` | Overwrite the output file if it exists. |
+
+### Examples
+
+```bash
+lane config template                                  # print a starter .lane.yaml
+lane config template --domain shop --port 4000        # seed a custom service
+lane config template -o .lane.yaml                    # scaffold the file in the current dir
+lane config template -o .lane.yaml --force            # overwrite an existing one
+```
+
 ## doctor
 
 Diagnose setup issues and print a pass/warn/fail checklist.

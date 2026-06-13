@@ -9,10 +9,11 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 
-use crate::config::{self, Domain};
+use crate::config::Domain;
 
 mod cert;
 mod completions;
+mod config;
 mod doctor;
 mod domain;
 mod down;
@@ -80,6 +81,8 @@ enum Commands {
     Domain(DomainArgs),
     /// Manage certificates (key types, wildcard certs)
     Cert(cert::CertArgs),
+    /// Project config helpers (generate a starter .lane.yaml)
+    Config(config::ConfigArgs),
     /// Diagnose setup issues
     Doctor(DoctorArgs),
     /// Install an OS service that auto-starts the lane daemon at login/boot
@@ -306,6 +309,7 @@ pub async fn run() -> Result<()> {
         Commands::Domain(a) => domain::run(&a).await,
         Commands::Doctor(a) => doctor::run(&a).await,
         Commands::Cert(a) => cert::run(&a).await,
+        Commands::Config(a) => config::run(&a).await,
         Commands::Install(a) => install::run(&a).await,
         Commands::Uninstall => uninstall::run().await,
         Commands::Upgrade => upgrade::run().await,
@@ -322,7 +326,7 @@ pub async fn run() -> Result<()> {
 pub(crate) fn normalize_name(input: &str) -> String {
     let trimmed = input.trim().to_lowercase();
     let trimmed = trimmed.strip_suffix('.').unwrap_or(&trimmed);
-    config::normalize_domain(trimmed)
+    crate::config::normalize_domain(trimmed)
 }
 
 /// Print the configured services with aligned `https://… → localhost:port`
@@ -361,9 +365,9 @@ pub(crate) fn print_services(domains: &[Domain]) {
     }
 }
 
-/// Parse repeatable `--route path=port` flags into [`config::Route`]s.
+/// Parse repeatable `--route path=port` flags into [`crate::config::Route`]s.
 /// Mirrors Go's `parseRouteFlags`.
-pub(crate) fn parse_route_flags(flags: &[String]) -> Result<Vec<config::Route>> {
+pub(crate) fn parse_route_flags(flags: &[String]) -> Result<Vec<crate::config::Route>> {
     let mut routes = Vec::with_capacity(flags.len());
     for f in flags {
         let (path, port_str) = f.split_once('=').ok_or_else(|| {
@@ -372,8 +376,8 @@ pub(crate) fn parse_route_flags(flags: &[String]) -> Result<Vec<config::Route>> 
         let port: i64 = port_str
             .parse()
             .map_err(|_| anyhow::anyhow!("invalid route port {port_str:?}"))?;
-        config::validate_route(path, port)?;
-        routes.push(config::Route {
+        crate::config::validate_route(path, port)?;
+        routes.push(crate::config::Route {
             path: path.to_string(),
             port: port as u16,
         });

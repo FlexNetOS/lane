@@ -15,6 +15,31 @@ use crate::config;
 /// The on-disk project file name.
 pub const FILE_NAME: &str = ".lane.yaml";
 
+/// Render a commented starter `.lane.yaml` for `lane config template`, seeded
+/// with one example service (`domain` → `port`). The active lines parse through
+/// [`load`]; the commented `routes`/options document the full schema. Inspired
+/// by consul-template's config scaffolding.
+///
+/// Pure (no I/O) so it is unit-testable without spawning the binary.
+pub fn render_template(domain: &str, port: u16) -> String {
+    format!(
+        "# .lane.yaml — lane project config. Run `lane up` from this directory.\n\
+         # Docs: https://github.com/FlexNetOS/lane/blob/main/docs/configuration.md\n\
+         \n\
+         services:                  # required; at least one entry\n\
+         \x20 - domain: {domain}    # bare label -> {domain}.test; any TLD honored verbatim\n\
+         \x20   port: {port}        # upstream localhost port (1-65535)\n\
+         \x20   # routes:           # optional; per-path port overrides on this domain\n\
+         \x20   #   - path: /api    # must start with \"/\"\n\
+         \x20   #     port: 8080\n\
+         \x20   #   - path: /ws\n\
+         \x20   #     port: 9000\n\
+         \n\
+         log_mode: full             # optional; full | minimal | off  (default: full)\n\
+         cors: false                # optional; default: false\n"
+    )
+}
+
 /// A single service mapping in a project file.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Service {
@@ -267,5 +292,38 @@ log_mode: minimal
         assert_eq!(found_path, path);
         let pc = load(&found_path).expect("load");
         assert_eq!(pc.services.len(), 1, "expected 1 service");
+    }
+
+    #[test]
+    fn test_render_template_round_trips_through_load() {
+        let rendered = render_template("myapp", 3000);
+        // It is documented (commented) and self-describing.
+        assert!(rendered.starts_with("# .lane.yaml"), "{rendered}");
+        assert!(rendered.contains("# routes:"), "routes shown as a comment");
+
+        // The active lines load + validate as a real project config.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        fs::write(&path, &rendered).unwrap();
+        let pc = load(&path).expect("rendered template should load");
+        pc.validate().expect("rendered template should validate");
+        assert_eq!(pc.services.len(), 1);
+        assert_eq!(pc.services[0].port, 3000);
+        assert_eq!(pc.log_mode, "full");
+        assert!(!pc.cors);
+        // The commented routes must NOT be active.
+        assert!(pc.services[0].routes.is_empty(), "routes are commented out");
+    }
+
+    #[test]
+    fn test_render_template_seeds_custom_domain_and_port() {
+        let rendered = render_template("api.local", 8080);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        fs::write(&path, &rendered).unwrap();
+        let pc = load(&path).expect("load");
+        // Bare-vs-FQDN normalization is `load`'s job; the port is verbatim.
+        assert_eq!(pc.services[0].port, 8080);
+        assert!(pc.services[0].domain.contains("api.local"));
     }
 }
