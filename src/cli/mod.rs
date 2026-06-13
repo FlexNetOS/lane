@@ -17,6 +17,7 @@ mod config;
 mod doctor;
 mod domain;
 mod down;
+mod inspect;
 mod install;
 mod list;
 mod login;
@@ -85,6 +86,8 @@ enum Commands {
     Config(config::ConfigArgs),
     /// Diagnose setup issues
     Doctor(DoctorArgs),
+    /// Live request-inspector TUI (tails the access log)
+    Inspect(InspectArgs),
     /// Install an OS service that auto-starts the lane daemon at login/boot
     Install(InstallArgs),
     /// Remove all lane data and configuration
@@ -179,6 +182,12 @@ pub(crate) struct VersionArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct InspectArgs {
+    /// Only show requests for this domain (optional filter)
+    pub name: Option<String>,
 }
 
 #[derive(Args)]
@@ -308,6 +317,7 @@ pub async fn run() -> Result<()> {
         Commands::Logout => logout::run().await,
         Commands::Domain(a) => domain::run(&a).await,
         Commands::Doctor(a) => doctor::run(&a).await,
+        Commands::Inspect(a) => inspect::run(&a).await,
         Commands::Cert(a) => cert::run(&a).await,
         Commands::Config(a) => config::run(&a).await,
         Commands::Install(a) => install::run(&a).await,

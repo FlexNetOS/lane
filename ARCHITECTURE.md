@@ -61,6 +61,7 @@ src/auth/             ⇐ internal/auth
 src/project/  -> put in src/config/project.rs OR own module src/project — USE src/project/mod.rs
 src/proxy/            ⇐ internal/proxy          (server.rs; handler.rs; health.rs; pages.rs)
 src/service.rs        lane-original (Phase 7): OS service-unit generation (systemd/launchd)
+src/inspect.rs        lane-original (Phase 7): request-inspector data model (parse + selection)
 src/setup/            ⇐ internal/setup
 src/doctor/           ⇐ internal/doctor         (mod.rs + trust check cfg-gated)
 src/daemon/           ⇐ internal/daemon         (mod.rs run/detach/ipc-handlers; socket.rs; protocol.rs)
@@ -68,8 +69,8 @@ src/cli/              ⇐ cmd/                    (one file per command + root.r
 ```
 
 `src/lib.rs` will declare exactly these modules:
-`config, osutil, httperr, term, log, protocol, tunnel, cert, system, auth, project, proxy, service, setup, doctor, daemon, cli`.
-(`service` is a lane-original Phase-7 addition — no slim counterpart.)
+`config, osutil, httperr, term, log, protocol, tunnel, cert, system, auth, project, proxy, service, inspect, setup, doctor, daemon, cli`.
+(`service` and `inspect` are lane-original Phase-7 additions — no slim counterpart.)
 
 ---
 
@@ -407,6 +408,21 @@ pub struct Installed { pub manager: &'static str, pub path: PathBuf, pub enabled
 pub fn install(enable: bool) -> Result<Installed>;  // write unit (mkdir -p); if enable: systemctl --user enable --now | launchctl load
 ```
 CLI: `lane install --service [--enable] [--print] [--json]` (`src/cli/install.rs`).
+
+## src/inspect  (lane-original — Phase 7; no slim counterpart)
+
+Data model + pure logic for `lane inspect`, the live request-inspector TUI. Tails the daemon's
+access log (the proxy's per-request record) and renders requests in a scrollable table + detail
+pane. The interactive shell (crossterm alternate screen / raw mode / key events, comfy-table
+rendering) is in `src/cli/inspect.rs`; non-TTY stdout prints a one-shot snapshot.
+
+```rust
+pub struct Entry { pub ts, domain, method, path, upstream, status, duration: String }  // method/path/upstream empty in minimal mode
+impl Entry { pub fn parse(line: &str) -> Option<Entry>; }   // 7 cols = full, 4 cols = minimal (mirrors cli::logs)
+pub struct State { pub entries: Vec<Entry>, pub selected: usize }
+impl State { pub fn new(); push(Entry); push_line(&str)->bool; select_next(); select_prev(); selected()->Option<&Entry> }
+```
+CLI: `lane inspect [name]` (`src/cli/inspect.rs`). New dep: `crossterm` (already in-tree via comfy-table).
 
 ## src/setup  (⇐ internal/setup)
 

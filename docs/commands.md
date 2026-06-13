@@ -648,6 +648,47 @@ lane config template -o .lane.yaml                    # scaffold the file in the
 lane config template -o .lane.yaml --force            # overwrite an existing one
 ```
 
+## inspect
+
+Live request-inspector TUI — watch requests as they hit your tunnels/proxies.
+
+### Synopsis
+
+```
+lane inspect [name]
+```
+
+### Description
+
+`lane inspect` tails the proxy daemon's access log and shows requests in a scrollable table with a
+detail pane for the selected request (time, domain, method, path, upstream, status, duration). It
+updates live as new requests arrive. Navigate with `↑`/`↓` (or `k`/`j`) and quit with `q`/`Esc`.
+
+If a `name` is given, only requests for that domain are shown. When the access log does not exist
+yet it prints `No logs yet. Start a domain first with 'lane start'.` When stdout is not a terminal
+(piped or redirected), it prints a one-shot snapshot table instead of entering the interactive UI.
+
+> The inspector renders the data lane records in its access log (request metadata). Request/response
+> **body** capture and modification are not part of this view.
+
+### Arguments
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `name` | string | Optional domain filter (only show requests for this domain). |
+
+### Flags
+
+_None._
+
+### Examples
+
+```bash
+lane inspect                 # watch all requests live
+lane inspect myapp.test      # only requests for myapp.test
+lane inspect | head          # non-interactive snapshot (piped)
+```
+
 ## doctor
 
 Diagnose setup issues and print a pass/warn/fail checklist.

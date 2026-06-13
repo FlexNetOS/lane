@@ -73,7 +73,7 @@ lane-loop crew.
 
 ### Lower priority (nice-to-have, larger scope)
 - [ ] Multi-hop tunnel support — proxy chains through intermediate hosts (gost-style). For developers behind NAT/firewall who need to share a local port through their company's VPN. Affects: tunnel wire protocol, client/server state machine.
-- [ ] Request inspection TUI (`lane inspect` — ngrok web UI pattern via IPC) — connect to running proxy daemon and view/modify request/response payloads. Affects: `src/daemon/socket`, new `inspect.rs` CLI module, TUI rendering (comfy-table or crossterm).
+- [x] Request inspection TUI (`lane inspect`) — SHIPPED: new pure `src/inspect.rs` (Entry::parse + State selection, 5 tests) + `src/cli/inspect.rs` (crossterm alt-screen/raw-mode/key-event TUI tailing the access log; comfy-table render; non-TTY snapshot fallback; 7 tests). New dep `crossterm` (already in-tree via comfy-table → 0 new transitive deps). Scope: renders the request metadata lane logs; body capture/modify is a documented future ceiling. ARCHITECTURE.md + docs/commands.md updated; +12 tests (254 green). Fourth Phase-7 Round B item (Phase A2).
 
 <!-- Discovered 2026-06-08 from external tool survey in docs/reference/repositories.md -->
 

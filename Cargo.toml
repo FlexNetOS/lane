@@ -65,6 +65,9 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["c
 owo-colors = "4"
 indicatif = "0.17"
 comfy-table = "7"
+# crossterm (already in the tree via comfy-table) powers the `lane inspect` TUI:
+# alternate screen, raw mode, and key events.
+crossterm = "0.29"
 
 # System / utility
 regex = "1"
