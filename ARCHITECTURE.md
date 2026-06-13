@@ -60,6 +60,7 @@ src/system/           ⇐ internal/system        (hostfile.rs; portfwd.rs trait+
 src/auth/             ⇐ internal/auth
 src/project/  -> put in src/config/project.rs OR own module src/project — USE src/project/mod.rs
 src/proxy/            ⇐ internal/proxy          (server.rs; handler.rs; health.rs; pages.rs)
+src/service.rs        lane-original (Phase 7): OS service-unit generation (systemd/launchd)
 src/setup/            ⇐ internal/setup
 src/doctor/           ⇐ internal/doctor         (mod.rs + trust check cfg-gated)
 src/daemon/           ⇐ internal/daemon         (mod.rs run/detach/ipc-handlers; socket.rs; protocol.rs)
@@ -67,7 +68,8 @@ src/cli/              ⇐ cmd/                    (one file per command + root.r
 ```
 
 `src/lib.rs` will declare exactly these modules:
-`config, osutil, httperr, term, log, protocol, tunnel, cert, system, auth, project, proxy, setup, doctor, daemon, cli`.
+`config, osutil, httperr, term, log, protocol, tunnel, cert, system, auth, project, proxy, service, setup, doctor, daemon, cli`.
+(`service` is a lane-original Phase-7 addition — no slim counterpart.)
 
 ---
 
@@ -378,6 +380,27 @@ Server design (replaces net/http + httputil.ReverseProxy):
   `log::request(...)`.
 - Provide `buildHandler` equivalent + helpers `normalize_host`, CORS set/strip.
 Match path-route matching logic byte-for-byte with Go `domainRouter.match` and `Domain.match_route`.
+
+## src/service  (lane-original — Phase 7; no slim counterpart)
+
+OS service-unit generation so the lane daemon auto-starts at login/boot. User-level (no root):
+the unit's start command re-execs the lane binary with `_LANE_DAEMON=1` (same trigger as
+`daemon::run_detached`). Render fns are pure (unit-testable); `install()` does the I/O.
+
+```rust
+pub enum Manager { Systemd, Launchd }
+impl Manager {
+    pub fn detect() -> Result<Self>;            // Linux→Systemd, macOS→Launchd, else error
+    pub fn label(self) -> &'static str;          // "systemd (user unit)" / "launchd (LaunchAgent)"
+    pub fn unit_path(self) -> Result<PathBuf>;   // ~/.config/systemd/user/lane.service | ~/Library/LaunchAgents/com.lane.daemon.plist
+}
+pub fn render_systemd_unit(exe: &Path) -> String;   // [Service] Environment=_LANE_DAEMON=1, ExecStart={exe}, Restart=on-failure, WantedBy=default.target
+pub fn render_launchd_plist(exe: &Path) -> String;  // Label=com.lane.daemon, ProgramArguments=[exe], _LANE_DAEMON=1, RunAtLoad, KeepAlive
+pub fn render(manager: Manager, exe: &Path) -> String;
+pub struct Installed { pub manager: &'static str, pub path: PathBuf, pub enabled: bool, pub enable_hint: &'static str }
+pub fn install(enable: bool) -> Result<Installed>;  // write unit (mkdir -p); if enable: systemctl --user enable --now | launchctl load
+```
+CLI: `lane install --service [--enable] [--print] [--json]` (`src/cli/install.rs`).
 
 ## src/setup  (⇐ internal/setup)
 

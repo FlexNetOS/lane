@@ -68,7 +68,7 @@ lane-loop crew.
 ### Medium priority — Round B (NOT started; each ~1 crate)
 - [ ] ACME integration (`--acme` flag on `start`) — use acme-lib to obtain a real public cert from Let's Encrypt for the local domain if DNS is configured. Would need DNS-01 or HTTP-01 challenge support. Affects: new `src/acme.rs` module, CLI `start` args, certificate generation flow.
 - [ ] Reverse tunnel syntax (`lane share R:3000:localhost:8080` — chisel-style) so users can expose specific upstream ports through the tunnel, not just the default port. Affects: `src/tunnel/protocol`, tunnel wire format, CLI args for share.
-- [ ] Service file generation (`lane install --service`) — drop a systemd unit or launchd plist for auto-starting the proxy daemon on boot. Current mechanism uses re-exec + setsid; add `systemctl enable` / launchd `plist` paths. Affects: new `src/service.rs` module, CLI `install` subcommand.
+- [x] Service file generation (`lane install --service`) — SHIPPED: new `src/service.rs` (pure systemd-unit/launchd-plist renderers + user-level `install()`) + `src/cli/install.rs` (`--service`/`--enable`/`--print`/`--json`); ExecStart re-execs the binary with `_LANE_DAEMON=1`; ARCHITECTURE.md + docs/commands.md updated; +5 tests (228 total, green). First Phase-7 Round B item (Phase A2).
 - [ ] `lane config template` — generate project configs from templates (inspired by consul-template), useful for teams sharing `.lane.yaml` patterns. Affects: `src/config/project`, new `template` subcommand, template engine integration.
 
 ### Lower priority (nice-to-have, larger scope)
