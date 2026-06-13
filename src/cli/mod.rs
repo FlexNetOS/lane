@@ -214,9 +214,13 @@ pub(crate) struct LogsArgs {
 
 #[derive(Args)]
 pub(crate) struct ShareArgs {
-    /// Local port to expose (required)
+    /// Local port to expose (or pass a reverse-tunnel forward spec argument)
     #[arg(short, long)]
-    pub port: u16,
+    pub port: Option<u16>,
+    /// Reverse-tunnel forward spec, chisel-style: R:[remotePort:][localHost:]localPort
+    /// (e.g. R:3000:localhost:8080) — forward to a specific local upstream
+    #[arg(value_name = "FORWARD")]
+    pub forward: Option<String>,
     /// Vanity subdomain name
     #[arg(long)]
     pub subdomain: Option<String>,

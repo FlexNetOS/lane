@@ -258,7 +258,11 @@ pub fn render_server_down(port: u16, error: &str) -> String; // include_str! ass
 // client.rs
 pub struct RequestEvent { pub method: String, pub path: String, pub status: u16, pub duration: Duration }
 pub struct ClientOptions { pub server_url: String, pub token: String, pub subdomain: String, pub domain: String,
-    pub local_port: u16, pub password: String, pub ttl: Option<Duration>, pub on_request: Option<Box<dyn Fn(RequestEvent)+Send+Sync>> }
+    pub local_host: String /* empty ⇒ localhost; lane-original reverse-tunnel */, pub local_port: u16,
+    pub password: String, pub ttl: Option<Duration>, pub on_request: Option<Box<dyn Fn(RequestEvent)+Send+Sync>> }
+// forward.rs (lane-original, Phase 7): chisel-style reverse-tunnel spec
+pub struct ForwardSpec { pub remote_port: Option<u16>, pub local_host: String, pub local_port: u16 }
+impl FromStr for ForwardSpec; // "R:[remotePort:][localHost:]localPort" — remote_port advisory (lane assigns the URL)
 pub struct Client { /* opts, domain_url, conn */ }
 impl Client {
     pub fn new(opts: ClientOptions) -> Self;
@@ -269,7 +273,7 @@ impl Client {
 ```
 Use `tokio-tungstenite` (`connect_async`) for wss. Registration: send JSON text frame, read JSON
 text frame. Then binary frames carry `encode_frame(request_id, raw_http_response)`. For each inbound
-binary frame: decode_frame -> deserialize_request -> issue to `http://localhost:{local_port}{uri}`
+binary frame: decode_frame -> deserialize_request -> issue to `http://{local_host}:{local_port}{uri}` (host defaults `localhost`)
 via `reqwest` -> serialize_response -> `encode_frame` -> write binary. Ping every 20s. Reconnect with
 exponential backoff (1s..30s). Close codes 4000 (TTL) / 4001 (dropped) -> stop. On forward error,
 respond with `render_server_down` as a 502 wire response and header `X-Lane-Error: connection-failed`.
