@@ -77,6 +77,16 @@ lane-loop crew.
 
 <!-- Discovered 2026-06-08 from external tool survey in docs/reference/repositories.md -->
 
+## SEQUENCING (owner directive 2026-06-13): Phase A → Phase B → Phase C
+
+The Option-B seam is **accepted design** but is **GATED**. Build order is fixed:
+- **Phase A (NOW — prerequisites, parallel):** **A1** obscura implementation/integration (separate
+  repo; build+verify its 8 crates + MCP/CDP surface — it's a real engine, NOT empty) · **A2** finish
+  lane **Phase 7 Round B** (this repo). ← *all current lane implementation work lives here.*
+- **Phase B (after A1 ∧ A2):** the `lane web` governed-egress seam (Option B). Design done
+  (`docs/adr/ADR-0001-lane-obscura-network-seam.md`); do **not** start until A is complete.
+- **Phase C (after B, separate ADR):** cross-machine **lane relay** (the standing wall).
+
 ## Phase 8: The W2 network mandate (STRATEGIC — the "bigger than the slim port" vision)
 
 Surfaced 2026-06-13 by tracing lane's intent/vision across the meta census
