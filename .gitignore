@@ -5,3 +5,7 @@
 .env
 
 .test_ro_check
+
+# .handoff ledger residency (P7: ledger is local; fleet/witnessed state is the kernel's)
+.handoff/ledger.db
+.handoff/*.db
