@@ -3,6 +3,7 @@
 //! A faithful Rust port of the Go tool `slim`. See `ARCHITECTURE.md` for the
 //! cross-module API contract and the original-source mapping.
 
+pub mod acme;
 pub mod auth;
 pub mod cert;
 pub mod cli;

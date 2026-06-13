@@ -22,7 +22,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::net::IpAddr;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
@@ -161,6 +161,51 @@ pub fn leaf_key_path(name: &str) -> PathBuf {
 /// True when both the leaf cert and key files for `name` exist on disk.
 pub fn leaf_exists(name: &str) -> bool {
     leaf_cert_path(name).exists() && leaf_key_path(name).exists()
+}
+
+/// `~/.lane/acme/{name}/` — where an ACME-issued (e.g. Let's Encrypt) cert for a
+/// domain lives. Kept separate from the CA-signed leaf store so the leaf
+/// renewal logic never clobbers a real public cert.
+pub fn acme_dir(name: &str) -> PathBuf {
+    config::dir().join("acme").join(name)
+}
+
+/// `~/.lane/acme/{name}/cert.pem` (the issued chain).
+pub fn acme_cert_path(name: &str) -> PathBuf {
+    acme_dir(name).join("cert.pem")
+}
+
+/// `~/.lane/acme/{name}/key.pem` (the issued cert's private key).
+pub fn acme_key_path(name: &str) -> PathBuf {
+    acme_dir(name).join("key.pem")
+}
+
+/// True when an ACME-issued cert + key for `name` exist on disk.
+pub fn acme_exists(name: &str) -> bool {
+    acme_cert_path(name).exists() && acme_key_path(name).exists()
+}
+
+/// Write an ACME-issued cert chain + key (PEM) to `~/.lane/acme/{name}/`,
+/// creating the directory. The key is written `0600`.
+pub fn write_acme(name: &str, cert_pem: &str, key_pem: &str) -> Result<()> {
+    let dir = acme_dir(name);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("creating ACME dir {}", dir.display()))?;
+    std::fs::write(acme_cert_path(name), cert_pem)
+        .with_context(|| format!("writing ACME cert for {name}"))?;
+    let key_path = acme_key_path(name);
+    std::fs::write(&key_path, key_pem).with_context(|| format!("writing ACME key for {name}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// Load the ACME-issued cert + key for `name` into a rustls [`CertifiedKey`].
+pub fn load_acme_tls(name: &str) -> Result<rustls::sign::CertifiedKey> {
+    load_certified_key(&acme_cert_path(name), &acme_key_path(name), name)
 }
 
 // ---------------------------------------------------------------------------
@@ -465,11 +510,18 @@ pub fn leaf_needs_renewal(name: &str) -> bool {
 /// `rustls_pemfile::private_key`, and builds the signing key via the ring
 /// provider's `any_supported_type`.
 pub fn load_leaf_tls(name: &str) -> Result<rustls::sign::CertifiedKey> {
-    let cert_path = leaf_cert_path(name);
-    let key_path = leaf_key_path(name);
+    load_certified_key(&leaf_cert_path(name), &leaf_key_path(name), name)
+}
 
+/// Load a PEM cert chain + private key from the given paths into a rustls
+/// [`CertifiedKey`]. Shared by [`load_leaf_tls`] and [`load_acme_tls`].
+fn load_certified_key(
+    cert_path: &Path,
+    key_path: &Path,
+    name: &str,
+) -> Result<rustls::sign::CertifiedKey> {
     let cert_bytes =
-        std::fs::read(&cert_path).with_context(|| format!("loading cert for {name}"))?;
+        std::fs::read(cert_path).with_context(|| format!("loading cert for {name}"))?;
     let mut cert_reader = std::io::BufReader::new(&cert_bytes[..]);
     let cert_chain = rustls_pemfile::certs(&mut cert_reader)
         .collect::<std::result::Result<Vec<_>, _>>()
@@ -478,7 +530,7 @@ pub fn load_leaf_tls(name: &str) -> Result<rustls::sign::CertifiedKey> {
         return Err(anyhow!("loading cert for {name}: no certificates in PEM"));
     }
 
-    let key_bytes = std::fs::read(&key_path).with_context(|| format!("loading cert for {name}"))?;
+    let key_bytes = std::fs::read(key_path).with_context(|| format!("loading cert for {name}"))?;
     let mut key_reader = std::io::BufReader::new(&key_bytes[..]);
     let key = rustls_pemfile::private_key(&mut key_reader)
         .with_context(|| format!("loading cert for {name}"))?

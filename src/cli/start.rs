@@ -75,14 +75,48 @@ pub async fn run(args: &super::StartArgs) -> Result<()> {
 
     system::add_host(&name).context("updating /etc/hosts")?;
 
-    // Generate (or renew) the leaf cert.  If --san was provided, append those
-    // extra SAN entries alongside the default set.
-    let extra_sans = args.san.as_ref().map(|s| parse_extra_sans(s)).transpose()?;
-    if let Some(sans) = extra_sans {
-        cert::ensure_leaf_cert_sans(&name, cert::KeyType::EcdsaP256, sans)
-            .context("generating certificate with extra SANs")?;
+    // Provision the certificate. With --acme, obtain a real Let's Encrypt cert
+    // via the ACME HTTP-01 challenge (the proxy then serves it ahead of the
+    // CA-signed leaf). Otherwise generate the local CA-signed leaf, appending
+    // any --san entries to the default SAN set.
+    if args.acme {
+        let addr_str = std::env::var("LANE_ACME_HTTP_ADDR")
+            .unwrap_or_else(|_| crate::acme::DEFAULT_CHALLENGE_ADDR.to_string());
+        let params = crate::acme::AcmeParams {
+            domain: name.clone(),
+            email: args.acme_email.clone().unwrap_or_default(),
+            staging: args.acme_staging,
+            challenge_addr: addr_str
+                .parse()
+                .with_context(|| format!("parsing ACME HTTP address {addr_str:?}"))?,
+        };
+        params.validate()?;
+        if !args.json {
+            let env = if args.acme_staging { " staging" } else { "" };
+            println!(
+                "{} Requesting a certificate for {name} via ACME (Let's Encrypt{env})…",
+                term::dim("→")
+            );
+        }
+        let issued = crate::acme::issue(&params)
+            .await
+            .context("ACME certificate issuance")?;
+        cert::write_acme(&name, &issued.cert_pem, &issued.key_pem)
+            .context("installing ACME certificate")?;
+        if !args.json {
+            println!(
+                "{} Installed ACME certificate for {name}",
+                term::check_mark()
+            );
+        }
     } else {
-        cert::ensure_leaf_cert(&name).context("generating certificate")?;
+        let extra_sans = args.san.as_ref().map(|s| parse_extra_sans(s)).transpose()?;
+        if let Some(sans) = extra_sans {
+            cert::ensure_leaf_cert_sans(&name, cert::KeyType::EcdsaP256, sans)
+                .context("generating certificate with extra SANs")?;
+        } else {
+            cert::ensure_leaf_cert(&name).context("generating certificate")?;
+        }
     }
 
     if !daemon::is_child() {

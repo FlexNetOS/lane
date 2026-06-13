@@ -62,6 +62,7 @@ src/project/  -> put in src/config/project.rs OR own module src/project — USE 
 src/proxy/            ⇐ internal/proxy          (server.rs; handler.rs; health.rs; pages.rs)
 src/service.rs        lane-original (Phase 7): OS service-unit generation (systemd/launchd)
 src/inspect.rs        lane-original (Phase 7): request-inspector data model (parse + selection)
+src/acme.rs           lane-original (Phase 7): ACME HTTP-01 issuance; live path gated by `acme` feature
 src/setup/            ⇐ internal/setup
 src/doctor/           ⇐ internal/doctor         (mod.rs + trust check cfg-gated)
 src/daemon/           ⇐ internal/daemon         (mod.rs run/detach/ipc-handlers; socket.rs; protocol.rs)
@@ -69,8 +70,8 @@ src/cli/              ⇐ cmd/                    (one file per command + root.r
 ```
 
 `src/lib.rs` will declare exactly these modules:
-`config, osutil, httperr, term, log, protocol, tunnel, cert, system, auth, project, proxy, service, inspect, setup, doctor, daemon, cli`.
-(`service` and `inspect` are lane-original Phase-7 additions — no slim counterpart.)
+`config, osutil, httperr, term, log, protocol, tunnel, cert, system, auth, project, proxy, service, inspect, acme, setup, doctor, daemon, cli`.
+(`service`, `inspect`, and `acme` are lane-original Phase-7 additions — no slim counterpart.)
 
 ---
 
@@ -408,6 +409,31 @@ pub struct Installed { pub manager: &'static str, pub path: PathBuf, pub enabled
 pub fn install(enable: bool) -> Result<Installed>;  // write unit (mkdir -p); if enable: systemctl --user enable --now | launchctl load
 ```
 CLI: `lane install --service [--enable] [--print] [--json]` (`src/cli/install.rs`).
+
+## src/acme  (lane-original — Phase 7; no slim counterpart)
+
+ACME (RFC 8555) certificate issuance for `lane start --acme` — a real Let's Encrypt cert via the
+HTTP-01 challenge. The **live** issuance path (`instant-acme`, network) is behind the **`acme` cargo
+feature**; the default build never compiles the ACME client (dependency-light). Pure parts +
+challenge responder are always compiled and tested.
+
+```rust
+pub struct AcmeParams { pub domain, email: String, pub staging: bool, pub challenge_addr: SocketAddr }
+impl AcmeParams { pub fn validate(&self) -> Result<()>;  // reject .test/.local/localhost/bare-IP/empty-email
+                  pub fn directory_url(&self) -> &'static str; }  // LE prod vs staging
+pub fn challenge_path(token: &str) -> String;            // /.well-known/acme-challenge/{token}
+pub struct ChallengeStore(/* token → key-authorization */);  // set/get/clear
+pub async fn serve_http01(store, addr) -> Result<Responder>; // minimal HTTP-01 responder (200 keyauth / 404)
+pub struct Issued { pub cert_pem: String, pub key_pem: String }
+#[cfg(feature = "acme")]      pub async fn issue(&AcmeParams) -> Result<Issued>;  // account→order→http-01→finalize→download
+#[cfg(not(feature = "acme"))] pub async fn issue(&AcmeParams) -> Result<Issued>;  // fail-closed: "rebuild with --features acme"
+```
+CLI: `lane start --acme [--acme-email <addr>] [--acme-staging]`. Issued certs are written to
+`~/.lane/acme/{domain}/{cert,key}.pem` by `cert::write_acme`; the proxy resolver (`load_leaf`/
+`ensure_leaf` in `proxy::server`) **prefers an on-disk ACME cert** (`cert::acme_exists` →
+`cert::load_acme_tls`) over the CA-signed leaf, so a real cert is served without clobbering the leaf
+store. HTTP-01 responder addr overridable via `LANE_ACME_HTTP_ADDR` (default `0.0.0.0:80`).
+Build live: `cargo build --features acme`.
 
 ## src/inspect  (lane-original — Phase 7; no slim counterpart)
 

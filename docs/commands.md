@@ -81,6 +81,15 @@ resolution); the domain is still started.
 | `--wait` | | bool | `false` | Wait for the upstream app to become reachable before the command returns. Each upstream port (the main port plus every route port) is polled until reachable or the timeout elapses. |
 | `--timeout` | | duration | `30s` | Maximum time to wait per upstream when `--wait` is set. Passing `--timeout` without `--wait` is an error; the value must be greater than 0. |
 | `--json` | | bool | `false` | Emit a JSON object instead of the human output: `{ "domain", "port", "url", "routes"? }`, where `url` is `https://<domain>`. With `--wait`, the progress lines are written to stderr so stdout stays pure JSON. |
+| `--san` | | string | _(none)_ | Extra Subject Alternative Names for the leaf cert (comma-separated IPs or DNS names), e.g. `10.0.0.1,extra.test`. |
+| `--acme` | | bool | `false` | Obtain a **real Let's Encrypt** certificate via the ACME HTTP-01 challenge instead of a local CA-signed leaf. The domain must be a **public FQDN** that resolves to this host (local-only names like `*.test`/`*.local` and bare IPs are rejected). The issued cert is written to `~/.lane/acme/<domain>/` and served ahead of the CA leaf. Requires a binary built with `--features acme`; otherwise it fails closed with `ACME issuance is not compiled in; rebuild lane with --features acme`. |
+| `--acme-email` | | string | _(none)_ | Contact email registered with the ACME account. Required with `--acme`. |
+| `--acme-staging` | | bool | `false` | Use the Let's Encrypt **staging** environment (untrusted certs; for testing the flow without hitting rate limits). |
+
+> **ACME / HTTP-01 notes.** The challenge is answered on `0.0.0.0:80` (override with the
+> `LANE_ACME_HTTP_ADDR` env var); that port must be reachable from the internet for the domain and
+> bindable (root for `:80`). The hosted live path is feature-gated (`cargo build --features acme`) so
+> the default build never pulls the ACME client.
 
 ### Examples
 
@@ -90,6 +99,10 @@ lane start myapp --port 3000
 
 # Custom TLD, path routing, and CORS, waiting up to 60s for upstreams
 lane start app.loc --port 3000 --route /api=8080 --route /ws=9000 --cors --wait --timeout 60s
+
+# Real Let's Encrypt cert for a public domain (binary built with --features acme)
+lane start app.example.com --port 3000 --acme --acme-email me@example.com
+lane start app.example.com --port 3000 --acme --acme-email me@example.com --acme-staging
 
 # Capture the mapped URL in a script
 lane start myapp --port 3000 --json
