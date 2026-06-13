@@ -1,6 +1,6 @@
 # ADR-0001 — The lane ↔ obscura network seam
 
-- **Status:** Proposed (Draft) — W2 deliverable
+- **Status:** Accepted (design) — implementation **GATED on Phase A** (see Sequencing). W2 deliverable.
 - **Date:** 2026-06-13
 - **Deciders:** FlexNetOS (owner) · lane maintainers
 - **Workstream:** W2 (network) of the estate upgrade mission
@@ -25,7 +25,11 @@ fixed relationship:
   certs, routing, proxying, and tunneling* on the local machine.
 - **obscura** = a Rust headless-browser engine (dom/net/browser/cdp/js/mcp/cli; real V8; CDP;
   Puppeteer/Playwright drop-in; anti-detect/stealth). It exposes an **MCP** surface for agents.
-  Today it is a pure mirror fork with zero org commits — a capability we *have* but have not *wired*.
+  It is a **real, substantial engine** — 8 crates (`obscura-browser/cdp/dom/js/mcp/net/cli` + core),
+  188 commits — a fork that **exists and is built**, but is **not yet integrated/verified as a
+  FlexNetOS tool** (1 org commit; its MCP surface is not yet exercised by the estate). So "obscura
+  needs implementation" means *estate integration + build-and-verify*, **not** greenfield browser work.
+  (Earlier census framing of obscura as a "zero-commit empty mirror" was inaccurate — corrected here.)
 - The vision phrase is **"agent web-access capability under lane's network control"** — i.e. obscura
   is the *engine*, lane is the *governor*.
 
@@ -149,9 +153,26 @@ that composes with the lane relay. **B is recommended.**
 
 ---
 
-## Status / next steps
+## Sequencing — Phase A gates Phase B (owner directive, 2026-06-13)
 
-This is a **draft for owner ratification**. On acceptance, W2 proceeds: (1) inventory obscura from code
-(its MCP/CLI contract), (2) implement the feature-gated `lane web` surface + `webpolicy` gate +
-governed spawn, (3) differential-test against weave's seam shape, (4) open the separate **lane relay**
-ADR for the cross-machine frontier.
+The seam design (Option B) is **accepted**, but it **cannot be built until its two prerequisites are
+done**. Order is fixed:
+
+**Phase A — prerequisites (must finish FIRST), run in parallel:**
+- **A1 · obscura implementation/integration** — make obscura a working, verified FlexNetOS tool:
+  build all 8 crates, exercise/confirm its MCP + CDP surface, land the org integration. This is the
+  egress engine the seam pins to; the seam is meaningless until it runs. *(Separate repo —
+  `FlexNetOS/obscura` — its own worktree/session.)*
+- **A2 · lane Phase 7 complete** — finish lane's own feature surface (Phase-7 **Round B**: ACME,
+  service-file generation, config templates, reverse-tunnel syntax, inspect TUI, multi-hop tunnels).
+  lane must be a complete network tool before it grows a web-egress seam. *(This repo — lane.)*
+
+**Phase B — the seam (only after A1 ∧ A2):** implement the feature-gated `lane web` surface +
+`webpolicy` gate + governed obscura spawn (Option B above), differential-test against weave's
+WL-049/ADR-0002 seam shape.
+
+**Phase C — the frontier (separate ADR, after B):** cross-machine **lane relay** — close the standing
+wall so the seam's governance/trust contract holds across fleet nodes, not just localhost.
+
+> Earlier drafts of this ADR listed the seam as the immediate "next" step; that was a sequencing error
+> — Phase A is the gate.

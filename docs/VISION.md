@@ -53,7 +53,7 @@ sits in plane **5-Feature:network**, whose members are:
 | Member | Tier | What it is today | Role in the plane |
 |---|---|---|---|
 | **lane** | B | TLS-terminating local-domain reverse proxy + tunnel client (the slim port). | **Network control** — trust, certs, routing, proxying, tunneling. The plane's spine. |
-| **obscura** | C | A Rust headless browser engine (7 crates: dom/net/browser/cdp/js/mcp/cli; real V8; CDP; Puppeteer/Playwright drop-in; anti-detect/stealth). Today a pure mirror fork, zero org commits. | **Web egress** — "agent web-access capability under lane's network control" (`GAP-REGISTER.md`). lane's *upgrade*. |
+| **obscura** | C→B | A **real, built** Rust headless-browser engine — **8 crates** (`obscura-browser/cdp/dom/js/mcp/net/cli` + core), 188 commits; real V8; CDP; Puppeteer/Playwright drop-in; anti-detect/stealth. A fork that **exists and builds** but is **not yet integrated/verified as a FlexNetOS tool** (Phase A1). *(Earlier "zero-commit empty mirror" framing was inaccurate.)* | **Web egress** — "agent web-access capability under lane's network control" (`GAP-REGISTER.md`). lane's *upgrade*. |
 | **network_hub** | D | Network-topology catalog scaffold; README prose ahead of an empty `registry.json`. | **Catalog** of the plane's tools + the native-Rust reference set. |
 
 The plane's job, as a whole: **give the agent fleet a network it controls and a web it can
@@ -115,7 +115,9 @@ directory holds ADR-0001…0010 with no network entry).
 - Request-inspection TUI (`lane inspect`, ngrok-web-UI pattern over the daemon socket).
 - Multi-hop tunnel proxy chains (gost-style).
 
-**🎯 Strategic — the W2 network mandate**
+**🎯 Strategic — the W2 network mandate** (owner sequencing 2026-06-13: **Phase A gates Phase B**)
+
+*Phase A (prerequisites, NOW): **A1** obscura built+integrated as a FlexNetOS tool (real 8-crate engine, not empty — needs estate integration/verify); **A2** lane Phase 7 Round B finished. Only then →*
 1. **lane↔obscura seam ADR** (drafted here) → decide the integration boundary.
 2. **Governed agent web-access**: obscura as the egress engine invoked under lane's network
    policy/trust.
