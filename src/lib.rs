@@ -22,6 +22,7 @@ pub mod setup;
 pub mod system;
 pub mod term;
 pub mod tunnel;
+pub mod webpolicy;
 
 /// Build version. Overridable at build time via the `LANE_VERSION` env var
 /// (set by CI/release); falls back to the crate version.
