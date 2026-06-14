@@ -503,22 +503,40 @@ pub enum WebOp { Open { url: String }, Run { script_path: String, url: String } 
 impl WebOp { pub fn target(&self)->&str;  pub fn kind(&self)->&'static str; }        // "open"|"run"; target = policy-checked URL
 pub fn authorize(policy:&WebPolicy, op:&WebOp) -> Result<(), DenyReason>;            // the gate: runs webpolicy::check before any spawn
 pub struct ObscuraSpawn { pub program: String, pub args: Vec<String>, pub envs: Vec<(String,String)> }  // pure command PLAN (data, runs nothing)
-pub enum SpawnPlanError { MissingBin, MissingProxy }                                 // seam-misconfigured (≠ a policy denial); Display+Error
+pub enum SpawnPlanError { MissingBin, MissingProxy, ScriptUnreadable(String) }       // seam-misconfigured / Run script unreadable (≠ a policy denial); Display+Error
 impl ObscuraSpawn { pub fn plan(cfg:&ObscuraConfig, ca_pem_path:&str, op:&WebOp) -> Result<ObscuraSpawn, SpawnPlanError>; }
 pub struct WebOutcome { pub op: &'static str, pub target: String, pub allowed: bool }
 pub async fn run(policy:&WebPolicy, cfg:&ObscuraConfig, ca_pem_path:&str, op:&WebOp) -> Result<WebOutcome>;
 //   gate FIRST (deny-by-default precedes any feature check) → then spawn (feature) / fail-closed (no feature)
 // #[cfg(not(feature="obscura"))] run_authorized() → Err: "obscura integration is not enabled … rebuild with --features obscura (Phase A1)"
 ```
+**Emitted obscura CLI (matches obscura's REAL `crates/obscura-cli` surface; requires obscura ≥ the
+Phase A1-2 `--ca` capability):** `plan()` emits obscura's **globals first**, then its `fetch`
+subcommand — there is no `open`/`run` subcommand in obscura.
+- Globals (before the subcommand), in order: `--proxy <obscura_proxy>`, `--ca <ca_pem_path>`,
+  `--allow-private-network`, and `--user-agent <ua>` when configured. `--allow-private-network` is
+  **mandatory**: lane's proxy listens on loopback (`127.0.0.1`) and obscura BLOCKS loopback/RFC1918 by
+  default via its SSRF guard, so without it obscura cannot even connect to lane's proxy. The governed
+  spawn intentionally routes through lane's loopback listener, so private-network access to *reach the
+  proxy* is required and safe — obscura's egress stays pinned to lane.
+- Subcommand: `WebOp::Open { url }` → `fetch <url>`. `WebOp::Run { script_path, url }` →
+  `fetch <url> --eval <SCRIPT-CONTENTS>` — obscura's `--eval` takes a JS **string**, not a path, so
+  `plan()` reads the script file's contents at plan time (fail-closed: `ScriptUnreadable(String)` if the
+  file can't be read — never an empty eval).
+- `--stealth` (when `obscura_stealth`) is appended **after** the `fetch` subcommand — it is
+  per-subcommand in obscura, not a global, and requires obscura built `--features stealth`.
+
 **Egress-pinning contract (the heart of "under lane's control at the packet level"):** `plan()` is the
 pure function that enforces it and is fully unit-tested without obscura. The plan ALWAYS (a) takes
 `program` from config (`obscura_bin`), **never** the ambient `$PATH`; (b) sets `--proxy <obscura_proxy>`
 **and** the standard `HTTP_PROXY`/`HTTPS_PROXY` (+ lowercase) + `LANE_OBSCURA_PROXY` env so a
 flag-ignoring obscura build still cannot escape the pin; (c) trusts lane's CA via `--ca <ca_pem_path>`
-+ `SSL_CERT_FILE`/`LANE_CA`. `plan()` refuses (`MissingBin`/`MissingProxy`) rather than emit an
-unpinned spawn. The live `run_authorized` (feature) builds a `tokio::process::Command` from the plan,
++ `SSL_CERT_FILE`/`LANE_CA` (obscura honors `SSL_CERT_FILE` as a CA fallback since A1-2). `plan()`
+refuses (`MissingBin`/`MissingProxy`/`ScriptUnreadable`) rather than emit an unpinned or empty-eval
+spawn. The live `run_authorized` (feature) builds a `tokio::process::Command` from the plan,
 logs the governed request via `crate::log::info` (one observable place for all agent web traffic), and
-waits on exit. CA path comes from `crate::cert::ca_cert_path()`.
+waits on exit. CA path comes from `crate::cert::ca_cert_path()`. obscura must be built so `obscura_bin`
+points at a real binary (and, for stealth, built `--features stealth`).
 
 **Config keys** (in `src/config`, all `#[serde(default)]` → old `.lane.yaml` still parses; inert
 without the feature): `obscura_bin/obscura_proxy: Option<String>`, `obscura_stealth: bool`,

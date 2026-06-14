@@ -748,7 +748,19 @@ every requested URL against a **deny-by-default policy** *before* obscura ever r
 agent web access "under lane's network control" — at the packet level, not by convention.
 
 - `lane web open <url>` — navigate to a URL.
-- `lane web run <script> --url <url>` — run a local automation script, starting at `--url`.
+- `lane web run <script> --url <url>` — evaluate a local JavaScript file against `--url`.
+
+**How lane drives obscura.** lane invokes obscura's REAL CLI: globals first
+(`--proxy <proxy> --ca <ca.pem> --allow-private-network [--user-agent <ua>]`), then obscura's `fetch`
+subcommand. `lane web open <url>` becomes `obscura … fetch <url>`; `lane web run <script> --url <url>`
+becomes `obscura … fetch <url> --eval <SCRIPT-CONTENTS>` — obscura's `--eval` takes a JavaScript
+**string**, so lane reads `<script>`'s contents at spawn-planning time (if the file can't be read the op
+fails closed — it never sends an empty eval). `--allow-private-network` is required because lane's proxy
+listens on loopback (`127.0.0.1`) and obscura blocks loopback/RFC1918 by default; it only lets obscura
+reach lane's proxy — obscura's egress stays pinned to lane. With `obscura_stealth` set, lane appends
+`--stealth` after `fetch` (per-subcommand), which additionally requires obscura built
+`--features stealth`. The live path needs an obscura binary at `obscura_bin` built with the Phase A1-2
+`--ca` (custom-CA-trust) capability or newer.
 
 **Deny-by-default.** With no allow-list configured, every target is denied. A target is allowed only
 when it matches an allow rule **and** trips none of the SSRF guards (loopback, private/RFC1918,
@@ -774,7 +786,7 @@ once obscura is integrated (Phase A1)`. A **denied** target reports the denial i
 | Argument | Type | Meaning |
 |---|---|---|
 | `url` (open) | string | The absolute `http`/`https` URL to navigate to (policy-checked). |
-| `script` (run) | string | Path to the local automation script obscura runs. |
+| `script` (run) | string | Path to a local JavaScript file; lane reads its contents and passes them to obscura's `fetch --eval`. |
 
 ### Flags
 
