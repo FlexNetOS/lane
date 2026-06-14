@@ -954,7 +954,16 @@ In `~/.lane/config.yaml` (all optional; an old config without them still parses;
 - `relay_trusted_nodes: [<NodeId>, …]` — deny-by-default trusted-node allowlist.
 - `relay_mode: peer|relay` — `peer` (direct-preferred p2p; default) or `relay` (rendezvous/relay-node
   role). Unknown values fall back to `peer`.
-- `relay_servers: [<url>, …]` — optional DERP/relay fallback URLs.
+- `relay_servers: [<url>, …]` — DERP/relay-server URLs controlling NAT-traversal relaying:
+  - **empty** (default) ⇒ iroh's **public n0 relays** — hole-punching + DERP fallback work with no
+    configuration.
+  - **`[disabled]`** ⇒ relaying **off** (direct-only; for direct-reachable/advanced deployments).
+  - **one or more URLs** ⇒ pin your **own self-hosted DERP relays** (`RelayMode::Custom`). Invalid
+    entries are skipped with a log line; if *every* entry is invalid lane falls back to the public
+    relays (relay connectivity is availability, not security — fail-safe, not fail-closed). Security
+    stays in the deny-by-default trusted-node allowlist + the webpolicy.
+
+  This `relay_servers` key (the DERP relay setting) is **distinct** from `relay_mode` (the node ROLE).
 
 The accepting node's web policy reuses the **same** `web_allow_hosts` / `web_allow_domains` /
 `web_allow_ports` keys as `lane web` (deny-by-default; empty ⇒ nothing reachable).
@@ -979,6 +988,20 @@ lane relay connect <B-NodeId>/127.0.0.1:3000 --local-port 8080
 # Inspect relay state.
 lane relay status --json
 ```
+
+```yaml
+# Pin self-hosted DERP relays (instead of the public n0 relays) in ~/.lane/config.yaml:
+relay_servers:
+  - https://derp.example.test
+# …or turn relaying off entirely (direct-only):
+# relay_servers: [disabled]
+```
+
+**Cross-machine validation.** The hermetic in-process tests prove the transport + governance logic, but
+true NAT traversal between two hosts on different networks is hardware-dependent and not CI-able. See
+[the cross-machine relay validation runbook](relay-validation.md) for the step-by-step operator
+procedure (direct vs relayed path, governance refusal at the target, deny-by-default trust, and pinning
+self-hosted DERP relays).
 
 ## doctor
 

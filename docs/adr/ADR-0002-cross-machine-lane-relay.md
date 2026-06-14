@@ -1,8 +1,11 @@
 # ADR-0002 — The cross-machine lane relay
 
-- **Status:** **Accepted** (owner-ratified 2026-06-13); **implementation UNDERWAY** — the
-  feature-gated `relay` surface (iroh peer, node identity, deny-by-default trusted-node allowlist,
-  governed cross-machine streams) is being built now. Phase **C** in ADR-0001's sequencing (A → B → C).
+- **Status:** **Accepted + IMPLEMENTED** (owner-ratified + shipped). The feature-gated `relay`
+  surface (iroh peer, persistent node identity, deny-by-default trusted-node allowlist, governance-
+  across-the-link, `lane relay up/connect/trust/untrust/status`) landed in **PR #47**; configurable
+  DERP/relay-server selection (`relay_servers`) landed alongside. The only remaining work is the
+  hardware-dependent real-fleet (≥2-host NAT) validation, covered by `docs/relay-validation.md`.
+  Phase **C** in ADR-0001's sequencing (A → B → C).
 - **Date:** 2026-06-13
 - **Deciders:** FlexNetOS (owner) · lane maintainers
 - **Workstream:** W2 (network) of the estate upgrade mission
@@ -112,7 +115,7 @@ the lane at the _destination_ node, identically to the local case.**
    vs remote** — an agent on node X driving obscura governed by lane on node Y over the relay is the
    same policy/trust/observability path as running it locally; only the transport differs.
 
-### Surface (proposed, feature-gated `relay`)
+### Surface (IMPLEMENTED, feature-gated `relay`)
 - `lane relay up` — join the fleet mesh as a node (start the iroh peer; print this node's NodeId).
 - `lane relay connect <node>/<service>` — open a governed stream to a service on a trusted node.
 - `lane relay trust <NodeId>` / `lane relay untrust <NodeId>` / `lane relay status` — manage the
@@ -176,3 +179,4 @@ the lane at the _destination_ node, identically to the local case.**
 |------|--------|
 | 2026-06-13 | Proposed. Architecture recommendation: Option A (iroh p2p + relay fallback), per-node webpolicy governance, `lane share` kept as the public-ingress case. Awaiting owner ratification; implementation owner-gated (Phase C). |
 | 2026-06-13 | **Accepted** — owner ratified Option A. Implementation begun: feature-gated `relay` (iroh peer + NodeId identity + deny-by-default trusted-node allowlist + governed cross-machine streams + two-node reachability/governance tests). |
+| 2026-06-14 | **IMPLEMENTED + shipped (PR #47).** Feature-gated `relay`: iroh 0.98 QUIC p2p, persistent NodeId identity, deny-by-default trusted-node allowlist, governance-across-the-link (per-node webpolicy + access-log), `lane relay up/connect/trust/untrust/status`, hermetic two-node + governance tests. Configurable DERP (`relay_servers` → `RelayMode::Custom`) + cross-machine validation runbook (`docs/relay-validation.md`) landed alongside. Remaining: hardware-dependent ≥2-host NAT validation (manual, per the runbook). |
