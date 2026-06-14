@@ -1,67 +1,56 @@
-# HANDOFF — lane (session 2026-06-13, "next 5 tasks")
+# HANDOFF — lane (session wrap 2026-06-14)
 
-closed_utc: 2026-06-13   branch: main   worktree: ~/Desktop/meta/lane (develop in a fresh worktree per CLAUDE.md)
-cycle_budget: 3   cycles_this_session: 3 (RESET to 0 on resume)
-last_item: Phase-7 Round B completion + Phase-8 lane web seam mechanism
-next_item: **OWNER SEQUENCE 1→4→3, step 3** — Phase A1 (obscura integration) is COMPLETE
-  (see _workspace/phase-a1-obscura.md: obscura #2/#3/#4, lane #42, network_hub #1 all merged; meta #35
-  armed/blocked-on-unrelated-fmt). Return to lane → run the lane DONE-gate. The live `lane web` path can
-  now be un-gated (obscura has --ca; lane emits the real CLI) as an optional follow-on feature.
-orchestrator_phase: n/a   gate_status: PASS   drift_status: clean (100% Rust-native; only .rs/.md/.toml; obscura is a child process, no new dep)
-cargo_gate: fmt=clean  clippy=clean (default AND --features obscura, -D warnings)  test=351 default / 350 --features obscura
-base_sha: a509066 (origin/main, includes #38/#39/#40)
-pr_url: all merged — #38, #39, #40
+closed_utc: 2026-06-14   branch: main   worktree: ~/Desktop/meta/lane (develop in a fresh worktree per CLAUDE.md)
+cycle_budget: n/a (interactive owner-directed session)   cycles_total: ~24   cycles_this_session: many
+last_item: Phase B seam hardening + relay configurable-DERP + census retag
+next_item: **none pressing — lane W2 network plane is COMPLETE.** Only owner-gated/hardware + 1 human-wall remain (below).
+orchestrator_phase: n/a   last_agent: rust-implementer (relay-servers)   gate_status: PASS   pr_url: all lane PRs merged
+base_sha: 134acfc (origin/main)
 
-## What this session did (owner's "implement the next 5 tasks" = option 1: multi-hop + lane web seam)
-The lane autonomous backlog had exactly ONE non-gated item left (multi-hop); the rest was owner-gated.
-Owner chose option 1 (multi-hop + the Phase-8 `lane web` seam) — selecting it RATIFIED ADR-0001.
+## What this (multi-part) session shipped — ALL MERGED to lane main
+1. "next 5 tasks": multi-hop tunnel #38, webpolicy #39, lane web seam mechanism #40 (ADR-0001 ratified).
+2. Phase A1 — obscura estate integration: obscura #2 (RED→GREEN baseline 271/0), #3 (custom-CA trust),
+   #4 (fork identity→FlexNetOS); lane #42 (seam reconciled to obscura's real CLI); network_hub #1
+   (obscura registered + Rust-native validator); A1-5 MCP verified via obscura mcp_client e2e.
+3. lane DONE-gate green (#43/#46/#48/#51 checkpoints).
+4. Live lane web #44 — GovernedProxy (lane runs the forward proxy; every connection webpolicy-checked + logged).
+5. Relay: ADR-0002 #45 → IMPLEMENTED #47 (iroh 0.98 p2p, deny-by-default node trust, governance-across-the-link).
+6. Phase B: upstream chaining + hardening #49; optional path-level TLS-MITM + webpolicy path rules #50.
+7. Relay configurable DERP (relay_servers→RelayMode::Custom) + cross-machine runbook #52; ADR-0002→IMPLEMENTED.
 
-1. **Multi-hop tunnel** (last Phase-7 Round B item) — **PR #38 MERGED**. `lane share --hop
-   [scheme://][user:pass@]host:port` (socks5 default | http) chained before the wss dial. New
-   `src/tunnel/hops.rs` + `src/tunnel/dialer.rs` (SOCKS5 RFC 1928/1929 + HTTP CONNECT, tokio TCP,
-   NO wire change, NO new dep, creds redacted). 261→301 tests. Phase-7 Round B now 6/6.
-2. **webpolicy** (Phase-8 seam foundation) — **PR #39 MERGED**. `src/webpolicy.rs`: pure deny-by-default
-   SSRF validator (loopback/RFC1918/ULA/link-local incl. 169.254.169.254/CGNAT/non-http/port-allowlist;
-   IPv4-mapped-v6 + userinfo-injection hardening; exact+suffix allowlist; check/check_addr/check_ip).
-   +28 tests.
-3. **lane web governed-egress seam** (ADR-0001 Option B mechanism) — **PR #40 MERGED**. `src/web/mod.rs`
-   (`WebOp`, `authorize()` deny-by-default gate via webpolicy, `ObscuraSpawn::plan()` pure pinned-argv+env
-   builder — egress ALWAYS proxied, bin from config never $PATH — `#[cfg(feature="obscura")]` live
-   tokio::process spawn + access-log) + `lane web open/run` CLI (`--json`) + config `obscura_*`/web-allowlist
-   (`#[serde(default)]`, `LANE_OBSCURA_*` env). `obscura = []` feature, NO new dep. ADR-0001 ratified.
-   329→351 tests (350 w/ --features obscura).
-
-landed_this_session:
-  - a509066 feat(web): lane web governed-egress seam — ADR-0001 Option B (#40)
-  - dd9f9f9 feat(web): webpolicy — deny-by-default SSRF egress validator (#39)
-  - 0e2236c feat(share): multi-hop tunnel — lane share --hop proxy chains (#38)
+landed_this_session (lane, recent):
+  - 134acfc feat(relay): configurable DERP relay servers + cross-machine validation runbook (#52)
+  - (earlier) #38-#52 per above; obscura #2/#3/#4; network_hub #1
+cross-repo:
+  - meta #37 (census obscura C→B) — **ARMED (auto-merge) but BLOCKED on pre-existing meta-main CI rot**
+    (Test/Clippy/Format/Integration all FAIL on meta main; my change is markdown-only so not the cause).
+    `--admin` merge is blocked by the harness guardrail → HUMAN WALL: a human with admin merges #37,
+    or meta-main's Rust CI is repaired (separate task, NOT lane).
 
 findings:
-  - lane Phase-7 (A2) is now COMPLETE (Round A + Round B 6/6). The `lane web` seam MECHANISM is in,
-    fail-closed. lane's product + local-seam work is done pending the obscura integration.
-  - The seam is built but INERT until obscura is integrated: `lane web` (default build) returns a clear
-    "rebuild with --features obscura (Phase A1)" error; even with the feature, it needs a real obscura
-    binary (`obscura_bin`) + a lane proxy listener to do anything live.
+  - lane W2 network plane = control (slim parity + --json) + governed web egress (lane web: GovernedProxy,
+    upstream chaining, optional path-level TLS-MITM) + cross-machine relay (iroh, governance-across-the-link).
+  - obscura integrated/green/CA-trusting/registered; the lane↔obscura seam (ADR-0001) matches obscura's real CLI.
+  - Durable detail: _workspace/phase-a1-obscura.md, _workspace/loop_state.md; docs/VISION.md, docs/adr/ADR-0001+0002,
+    docs/relay-validation.md.
 
 decisions_and_dead_ends:
-  - **owner-gated** = the loop may not unilaterally commit lane to a major network-architecture direction
-    that isn't human-ratified (the seam ADR was `Proposed`; the relay needs its own ADR). Owner picking
-    option 1 ratified the seam. The relay + network_hub registry remain gated (each needs its own ADR).
-  - **Build the mechanism ahead of its live infra, feature-gated + fail-closed** — the proven lane pattern
-    (ACME, multi-hop): pure parts always-compiled + fully tested, live driver behind a cargo feature.
-    This let the seam ship cleanly BEFORE obscura A1, honoring the A1-gates-B sequencing (mechanism ≠ live).
-  - **obscura is Option-A-rejected as a crate dep** — it is a CHILD PROCESS (Option B), so the `obscura`
-    feature added NO dependency.
-  - Daemon/MCP `lane_web` dispatcher: DOCUMENTED as the next step, NOT built — it can't be exercised until
-    obscura's MCP surface is integrated (Phase A1). CLI is the v1 surface.
+  - OWNER BLANKET APPROVAL (2026-06-14): all lane ADRs/items pre-approved — do NOT gate on approval; build straight through.
+  - GovernedProxy v1 = connection-level governance (matches webpolicy's host/port grain); TLS-MITM is OPT-IN
+    (web_tls_inspect) for path-level — reuses cert::ensure_leaf_cert/load_leaf_tls; re-origination keeps real TLS validation.
+  - relay = modern iroh 0.98, MSRV bumped 1.82→1.89 (CI on stable, default build unaffected; iroh feature-gated).
+  - relay_servers empty→Default(public relays); URLs→Custom(self-hosted DERP); all-invalid→fail-SAFE Default.
+  - Subagents died twice on transient API errors; recovery = assess partial work in worktree + finish (inline or fresh agent).
+
+icm_stored: context-lane (session wrap), errors-resolved (subagent-death recovery pattern),
+  decisions-lane (MITM/relay/MSRV design), preferences (owner blanket-approval; stop gating).
 
 verify_on_resume: |
-  cd <fresh worktree off origin/main @ a509066+>
-  cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test            # expect 351 green
-  cargo clippy --all-targets --features obscura -- -D warnings && cargo test --features obscura  # expect 350 green
+  cd <fresh worktree off origin/main @ 134acfc+>
+  cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test            # 411 green
+  cargo clippy --all-targets --features relay -- -D warnings && cargo test --features relay      # 422 green
+  cargo clippy --all-targets --all-features -- -D warnings                                       # clean
 
-resume_command: continue the owner sequence 1→4→3 at STEP 4 — pivot the loop to Phase A1 (obscura estate
-  integration in FlexNetOS/obscura: build+verify its 8 crates + exercise its MCP surface as a FlexNetOS
-  tool). That is the gate that un-gates lane's live `lane web`. After A1, return to lane: STEP 3 = run the
-  lane DONE gate (build+release+test+fmt+clippy green, backlog clear) and decide whether to wire the live
-  obscura path. The lane Phase-8 relay + network_hub items stay owner-gated (own ADRs).
+resume_command: lane W2 is COMPLETE — nothing to build unless the owner opens a new direction. Open items are:
+  (1) HUMAN WALL: merge meta #37 (census C→B) — admin merge, or fix meta-main CI rot. (2) HARDWARE: real-fleet
+  ≥2-host NAT relay validation per docs/relay-validation.md. Both are operational, not lane code work.
