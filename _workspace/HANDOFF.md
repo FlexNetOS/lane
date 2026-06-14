@@ -3,8 +3,10 @@
 closed_utc: 2026-06-13   branch: main   worktree: ~/Desktop/meta/lane (develop in a fresh worktree per CLAUDE.md)
 cycle_budget: 3   cycles_this_session: 3 (RESET to 0 on resume)
 last_item: Phase-7 Round B completion + Phase-8 lane web seam mechanism
-next_item: **OWNER SEQUENCE 1→4→3, step 4** — PIVOT to Phase A1 = obscura estate integration
-  (repo FlexNetOS/obscura), the real gate that un-gates lane's live `lane web` path; then step 3 = DONE-gate lane.
+next_item: **OWNER SEQUENCE 1→4→3, step 3** — Phase A1 (obscura integration) is COMPLETE
+  (see _workspace/phase-a1-obscura.md: obscura #2/#3/#4, lane #42, network_hub #1 all merged; meta #35
+  armed/blocked-on-unrelated-fmt). Return to lane → run the lane DONE-gate. The live `lane web` path can
+  now be un-gated (obscura has --ca; lane emits the real CLI) as an optional follow-on feature.
 orchestrator_phase: n/a   gate_status: PASS   drift_status: clean (100% Rust-native; only .rs/.md/.toml; obscura is a child process, no new dep)
 cargo_gate: fmt=clean  clippy=clean (default AND --features obscura, -D warnings)  test=351 default / 350 --features obscura
 base_sha: a509066 (origin/main, includes #38/#39/#40)
