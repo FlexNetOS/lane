@@ -731,7 +731,9 @@ lane inspect | head          # non-interactive snapshot (piped)
 ## web
 
 Governed web egress through obscura — every request is gated by lane's **deny-by-default** policy and
-pinned through lane's own proxy (ADR-0001, the lane↔obscura network seam).
+pinned through **lane's own governed forward proxy** (ADR-0001, the lane↔obscura network seam). In a
+`--features obscura` build, `lane web` runs a real obscura child whose egress is forced through a
+loopback proxy lane operates; every connection obscura opens is policy-checked and access-logged.
 
 ### Synopsis
 
@@ -743,17 +745,40 @@ lane web run <script> --url <url> [--json]
 ### Description
 
 `lane web` is lane's governed gateway to obscura, a headless-browser engine. lane spawns obscura as a
-managed child process, forces its web egress **through lane**, makes it trust lane's CA, and checks
-every requested URL against a **deny-by-default policy** *before* obscura ever runs. This is what makes
-agent web access "under lane's network control" — at the packet level, not by convention.
+managed child process, forces its web egress **through a proxy lane runs**, makes it trust lane's CA,
+and checks every requested URL against a **deny-by-default policy**. Governance is two layers: the entry
+URL is gated *before* obscura ever runs, AND every connection obscura subsequently opens is
+independently checked by lane's governed proxy. This is what makes agent web access "under lane's
+network control" — at the packet level, not by convention.
 
 - `lane web open <url>` — navigate to a URL.
 - `lane web run <script> --url <url>` — evaluate a local JavaScript file against `--url`.
 
+**lane's governed proxy.** In a `--features obscura` build, `lane web` first starts a small forward
+proxy bound to an ephemeral loopback port, then pins obscura's egress to it. For each connection obscura
+opens, the proxy applies the **same deny-by-default policy**:
+
+- `CONNECT host:port` (every `https://` origin obscura reaches) → host/port is policy-checked; allowed
+  connections are tunneled byte-for-byte to the origin (lane does **not** decrypt the TLS — see below),
+  denied ones get `403` and never reach the origin.
+- absolute-form plain HTTP (`GET http://host/…`) → the URL is policy-checked; allowed requests are
+  forwarded and the response relayed, denied ones get `403`.
+
+Every request — allowed and denied — is written to lane's access log (`web-egress ALLOW …` /
+`web-egress DENY … (reason)`), the single place all governed agent web traffic is observable. When
+obscura exits, lane shuts the proxy down.
+
+**No TLS interception (by design).** lane's governed proxy does **not** man-in-the-middle TLS; it
+governs HTTPS at the `CONNECT` host/port level. That matches exactly what the policy decides on
+(host + port + scheme), so connection-level governance is sufficient and complete for this policy. lane
+still emits `--ca` to obscura — that is forward-compatibility for a possible future path-level
+inspection mode; the current proxy does not use it to decrypt.
+
 **How lane drives obscura.** lane invokes obscura's REAL CLI: globals first
-(`--proxy <proxy> --ca <ca.pem> --allow-private-network [--user-agent <ua>]`), then obscura's `fetch`
-subcommand. `lane web open <url>` becomes `obscura … fetch <url>`; `lane web run <script> --url <url>`
-becomes `obscura … fetch <url> --eval <SCRIPT-CONTENTS>` — obscura's `--eval` takes a JavaScript
+(`--proxy <governed-proxy-addr> --ca <ca.pem> --allow-private-network [--user-agent <ua>]`), then
+obscura's `fetch` subcommand. The `<governed-proxy-addr>` is **lane's own loopback proxy** (not a
+user-set proxy). `lane web open <url>` becomes `obscura … fetch <url>`; `lane web run <script> --url
+<url>` becomes `obscura … fetch <url> --eval <SCRIPT-CONTENTS>` — obscura's `--eval` takes a JavaScript
 **string**, so lane reads `<script>`'s contents at spawn-planning time (if the file can't be read the op
 fails closed — it never sends an empty eval). `--allow-private-network` is required because lane's proxy
 listens on loopback (`127.0.0.1`) and obscura blocks loopback/RFC1918 by default; it only lets obscura
@@ -776,10 +801,18 @@ cargo build --features obscura     # or: cargo install … --features obscura
 
 Without the feature, `lane web` still parses and runs the policy gate, then — for an **allowed** target
 — fails closed with: `obscura integration is not enabled in this build; rebuild with --features obscura
-once obscura is integrated (Phase A1)`. A **denied** target reports the denial in every build.
+once obscura is integrated (Phase A1)`. A **denied** target reports the denial in every build. (lane's
+governed proxy itself is always compiled and unit-tested even in the default build; only the obscura
+child spawn is feature-gated.)
 
-> The daemon / MCP `lane_web` dispatcher (so agents reach this seam through lane's gate) is the
-> documented next step once obscura is integrated; the CLI here is the v1 surface.
+**Prerequisites for the live path.** Build lane `--features obscura`; build a real obscura binary (with
+the `--ca` capability, and `--features stealth` if you use `obscura_stealth`) and point `obscura_bin` at
+it; configure an allow-list (`web_allow_hosts` / `web_allow_domains`) — with none, everything is denied.
+Leave `obscura_proxy` unset for direct egress (upstream chaining is not yet supported).
+
+> The daemon / MCP `lane_web` dispatcher (so agents reach this seam through lane's gate) and
+> upstream-proxy chaining for the governed proxy are the documented next steps; the CLI here is the v1
+> surface.
 
 ### Arguments
 
@@ -814,8 +847,8 @@ the deny-everything default and old configs still parse):
 | `web_allow_hosts` | list of string | Exact-host allow rules (e.g. `api.example.com`). |
 | `web_allow_domains` | list of string | Domain-suffix allow rules — the domain and any sub-domain. |
 | `web_allow_ports` | list of int | Allowed destination ports (empty ⇒ `{80, 443}`). |
-| `obscura_bin` | string | Path to the obscura binary — **never** resolved from `$PATH`. |
-| `obscura_proxy` | string | lane-controlled proxy listener egress is pinned through (e.g. `http://127.0.0.1:10443`). |
+| `obscura_bin` | string | Path to a real obscura binary — **never** resolved from `$PATH`. Required for the live path. |
+| `obscura_proxy` | string | **Optional upstream** proxy lane's governed proxy chains *allowed* egress through (after governance), e.g. a corporate proxy. **v1 supports the direct case only**: if set, `lane web` fails closed with "upstream proxy chaining not yet supported; unset `obscura_proxy`" — it is **not** the proxy obscura is pinned to (that is always lane's own governed proxy). Leave unset for direct egress. |
 | `obscura_stealth` | bool | Enable obscura's anti-detect / stealth mode. |
 | `obscura_user_agent` | string | Override the User-Agent obscura presents. |
 

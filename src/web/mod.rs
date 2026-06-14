@@ -33,6 +33,10 @@ use anyhow::Result;
 use crate::config::ObscuraConfig;
 use crate::webpolicy::{DenyReason, WebPolicy};
 
+pub mod proxy;
+
+pub use proxy::GovernedProxy;
+
 /// A governed web operation, requested via `lane web …` and gated by
 /// [`authorize`] before obscura ever runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,10 +121,6 @@ pub enum SpawnPlanError {
     /// `obscura_bin` is not configured. lane never resolves obscura from
     /// `$PATH`, so without an explicit path there is nothing to spawn.
     MissingBin,
-    /// `obscura_proxy` is not configured. Egress MUST be pinned through a
-    /// lane-controlled listener; refusing to plan an unpinned spawn is what
-    /// keeps obscura under lane's control.
-    MissingProxy,
     /// A [`WebOp::Run`]'s `script_path` could not be read. obscura's `fetch
     /// --eval` takes a JS *string*, so lane reads the file at plan time;
     /// failing to read it fails closed (the carried `String` is the I/O error)
@@ -134,10 +134,6 @@ impl std::fmt::Display for SpawnPlanError {
             SpawnPlanError::MissingBin => f.write_str(
                 "obscura binary not configured: set `obscura_bin` (or LANE_OBSCURA_BIN); \
                  lane never resolves obscura from $PATH",
-            ),
-            SpawnPlanError::MissingProxy => f.write_str(
-                "obscura proxy not configured: set `obscura_proxy` (or LANE_OBSCURA_PROXY); \
-                 egress must be pinned through lane",
             ),
             SpawnPlanError::ScriptUnreadable(err) => {
                 write!(f, "cannot read automation script for `fetch --eval`: {err}")
@@ -172,13 +168,24 @@ impl ObscuraSpawn {
     /// string, not a path). `--stealth` (when `config.stealth`) is appended
     /// **after** the `fetch` subcommand because it is per-subcommand in obscura,
     /// not a global (and requires obscura to be built `--features stealth`).
+    ///
+    /// `proxy` is the egress endpoint obscura is pinned to. In the LIVE path it
+    /// is **lane's own governed-proxy** address ([`crate::web::GovernedProxy::addr`])
+    /// — NOT the user's `obscura_proxy` config. obscura therefore routes every
+    /// connection through lane's loopback governor, where it is policy-checked
+    /// and logged. (The user's `obscura_proxy`, when set, is repurposed as an
+    /// optional *upstream* for the governed proxy itself — see
+    /// [`crate::web::GovernedProxy::start_with_upstream`].) Keeping `proxy` a
+    /// parameter (rather than reading it from config) is what lets the live
+    /// caller pin obscura to lane.
     pub fn plan(
         config: &ObscuraConfig,
+        proxy: &str,
         ca_pem_path: &str,
         op: &WebOp,
     ) -> Result<ObscuraSpawn, SpawnPlanError> {
         let program = config.bin.clone().ok_or(SpawnPlanError::MissingBin)?;
-        let proxy = config.proxy.clone().ok_or(SpawnPlanError::MissingProxy)?;
+        let proxy = proxy.to_string();
 
         // Globals (before the subcommand): egress pinning (`--proxy`, also
         // surfaced via env below for builds that honor proxy env over a flag) +
@@ -273,11 +280,15 @@ pub async fn run(
     op: &WebOp,
 ) -> Result<WebOutcome> {
     // Gate first, in every build: deny-by-default precedes any feature check.
+    // This is the ENTRY-op gate (defense in depth): the entry URL is checked
+    // before any spawn, AND — in the feature build — every egress connection
+    // obscura subsequently opens is independently checked by lane's governed
+    // proxy. Two layers, same deny-by-default policy.
     if let Err(reason) = authorize(policy, op) {
         anyhow::bail!("denied: {reason}");
     }
 
-    run_authorized(config, ca_pem_path, op).await?;
+    run_authorized(policy, config, ca_pem_path, op).await?;
 
     Ok(WebOutcome {
         op: op.kind(),
@@ -286,21 +297,49 @@ pub async fn run(
     })
 }
 
-/// Spawn obscura for an already-authorized op (feature build).
+/// Spawn obscura for an already-authorized op (feature build), pinned to lane's
+/// own governed forward proxy so EVERY connection obscura opens is
+/// policy-checked and logged — not just the entry URL.
+///
+/// Flow:
+/// 1. Start a [`GovernedProxy`] on loopback, governing with the same `policy`.
+///    The user's `config.proxy` (`obscura_proxy`), when set, becomes the proxy's
+///    optional **upstream** (chained *after* governance); v1 supports the direct
+///    case and fails closed with a clear error if an upstream is configured.
+/// 2. Build the spawn plan pinning obscura's `--proxy` (and proxy env) to the
+///    governed proxy's address — NOT the raw user config.
+/// 3. Spawn obscura; await it; then shut the governed proxy down (RAII via
+///    `GovernedProxy::drop`, plus an explicit `shutdown()`).
 #[cfg(feature = "obscura")]
-async fn run_authorized(config: &ObscuraConfig, ca_pem_path: &str, op: &WebOp) -> Result<()> {
+async fn run_authorized(
+    policy: &WebPolicy,
+    config: &ObscuraConfig,
+    ca_pem_path: &str,
+    op: &WebOp,
+) -> Result<()> {
     use anyhow::Context;
 
-    let plan = ObscuraSpawn::plan(config, ca_pem_path, op)
+    // Start lane's governed proxy. The user's obscura_proxy becomes the optional
+    // upstream (v1: direct only, fail closed on upstream — never a silent drop).
+    let governed = GovernedProxy::start_with_upstream(policy.clone(), config.proxy.clone())
+        .await
+        .context("starting lane governed proxy")?;
+    let proxy_addr = governed.addr();
+
+    // Pin obscura to LANE'S governed proxy (not the user's raw config). Every
+    // connection obscura opens now flows through lane's policy-checked governor.
+    let plan = ObscuraSpawn::plan(config, &proxy_addr, ca_pem_path, op)
         .map_err(|e| anyhow::anyhow!("cannot spawn obscura: {e}"))?;
 
     // Observe the governed request in lane's access log — the single place all
-    // agent web traffic lands (ADR-0001 §4).
+    // agent web traffic lands (ADR-0001 §4). Per-connection ALLOW/DENY lines are
+    // emitted by the governed proxy itself.
     crate::log::info(&format!(
-        "web {} {} via {}",
+        "web {} {} via {} (governed proxy {})",
         op.kind(),
         op.target(),
-        plan.program
+        plan.program,
+        proxy_addr,
     ));
 
     let mut command = tokio::process::Command::new(&plan.program);
@@ -312,7 +351,12 @@ async fn run_authorized(config: &ObscuraConfig, ca_pem_path: &str, op: &WebOp) -
     let status = command
         .status()
         .await
-        .with_context(|| format!("spawning obscura ({})", plan.program))?;
+        .with_context(|| format!("spawning obscura ({})", plan.program));
+
+    // obscura has exited (or failed to spawn): governance ends here. Explicit
+    // shutdown in addition to the Drop guard so the port is freed promptly.
+    governed.shutdown();
+    let status = status?;
 
     if !status.success() {
         anyhow::bail!("obscura exited with status {}", status.code().unwrap_or(-1));
@@ -324,7 +368,12 @@ async fn run_authorized(config: &ObscuraConfig, ca_pem_path: &str, op: &WebOp) -
 /// obscura`. The op was already authorized by [`run`]; this is the single
 /// sanctioned "not enabled" path (mirrors [`crate::acme::issue`]).
 #[cfg(not(feature = "obscura"))]
-async fn run_authorized(_config: &ObscuraConfig, _ca_pem_path: &str, _op: &WebOp) -> Result<()> {
+async fn run_authorized(
+    _policy: &WebPolicy,
+    _config: &ObscuraConfig,
+    _ca_pem_path: &str,
+    _op: &WebOp,
+) -> Result<()> {
     anyhow::bail!(
         "obscura integration is not enabled in this build; rebuild with \
          `--features obscura` once obscura is integrated (Phase A1)"
@@ -344,6 +393,10 @@ mod tests {
             user_agent: None,
         }
     }
+
+    /// The lane governed-proxy addr the live caller pins obscura to. In tests it
+    /// is a fixed loopback URL standing in for `GovernedProxy::addr`.
+    const GOVERNED: &str = "http://127.0.0.1:10443";
 
     fn allow_example() -> WebPolicy {
         WebPolicy::default().allow_domain("example.com")
@@ -445,20 +498,33 @@ mod tests {
             url: "https://example.com/".into(),
         };
         assert_eq!(
-            ObscuraSpawn::plan(&cfg(None, Some("http://127.0.0.1:10443")), "/ca.pem", &op),
+            ObscuraSpawn::plan(&cfg(None, None), GOVERNED, "/ca.pem", &op),
             Err(SpawnPlanError::MissingBin)
         );
     }
 
     #[test]
-    fn plan_requires_proxy_so_egress_is_pinned() {
+    fn plan_pins_egress_to_the_caller_supplied_governed_proxy() {
+        // The proxy is now supplied by the live caller (lane's governed-proxy
+        // addr), NOT read from user config. Even if the user set a different
+        // obscura_proxy, the plan pins to the governed addr passed in.
         let op = WebOp::Open {
             url: "https://example.com/".into(),
         };
-        assert_eq!(
-            ObscuraSpawn::plan(&cfg(Some("/opt/obscura"), None), "/ca.pem", &op),
-            Err(SpawnPlanError::MissingProxy)
-        );
+        let plan = ObscuraSpawn::plan(
+            &cfg(Some("/opt/obscura"), Some("http://user-configured-proxy:9")),
+            GOVERNED,
+            "/ca.pem",
+            &op,
+        )
+        .expect("plan");
+        let proxy_idx = plan.args.iter().position(|a| a == "--proxy").expect("flag");
+        assert_eq!(plan.args[proxy_idx + 1], GOVERNED);
+        // The user's obscura_proxy is NOT what obscura is pinned to.
+        assert!(!plan
+            .args
+            .iter()
+            .any(|a| a == "http://user-configured-proxy:9"));
     }
 
     #[test]
@@ -467,7 +533,8 @@ mod tests {
             url: "https://example.com/".into(),
         };
         let plan = ObscuraSpawn::plan(
-            &cfg(Some("/opt/obscura/obscura"), Some("http://127.0.0.1:10443")),
+            &cfg(Some("/opt/obscura/obscura"), None),
+            GOVERNED,
             "/home/u/.lane/certs/ca.pem",
             &op,
         )
@@ -478,7 +545,7 @@ mod tests {
 
         // --proxy flag is present (a global) and points at the lane listener.
         let proxy_idx = plan.args.iter().position(|a| a == "--proxy").expect("flag");
-        assert_eq!(plan.args[proxy_idx + 1], "http://127.0.0.1:10443");
+        assert_eq!(plan.args[proxy_idx + 1], GOVERNED);
 
         // --allow-private-network is a global so obscura's SSRF guard permits
         // reaching lane's loopback proxy, and it precedes the `fetch`
@@ -532,11 +599,11 @@ mod tests {
         };
         let config = ObscuraConfig {
             bin: Some("/opt/obscura".into()),
-            proxy: Some("http://127.0.0.1:10443".into()),
+            proxy: None,
             stealth: true,
             user_agent: Some("lane-web/1".into()),
         };
-        let plan = ObscuraSpawn::plan(&config, "/ca.pem", &op).expect("plan");
+        let plan = ObscuraSpawn::plan(&config, GOVERNED, "/ca.pem", &op).expect("plan");
 
         // --user-agent is a global: it precedes the `fetch` subcommand.
         let ua_idx = plan
@@ -569,12 +636,8 @@ mod tests {
         let op = WebOp::Open {
             url: "https://example.com/".into(),
         };
-        let plan = ObscuraSpawn::plan(
-            &cfg(Some("/opt/obscura"), Some("http://127.0.0.1:10443")),
-            "/ca.pem",
-            &op,
-        )
-        .expect("plan");
+        let plan = ObscuraSpawn::plan(&cfg(Some("/opt/obscura"), None), GOVERNED, "/ca.pem", &op)
+            .expect("plan");
         assert!(!plan.args.iter().any(|a| a == "--stealth"));
         assert!(!plan.args.iter().any(|a| a == "--user-agent"));
     }
@@ -592,12 +655,8 @@ mod tests {
             script_path: script_path.to_string_lossy().into_owned(),
             url: "https://example.com/start".into(),
         };
-        let plan = ObscuraSpawn::plan(
-            &cfg(Some("/opt/obscura"), Some("http://127.0.0.1:10443")),
-            "/ca.pem",
-            &op,
-        )
-        .expect("plan");
+        let plan = ObscuraSpawn::plan(&cfg(Some("/opt/obscura"), None), GOVERNED, "/ca.pem", &op)
+            .expect("plan");
 
         // No `run` subcommand and no `--url` flag — obscura has neither.
         assert!(!plan.args.iter().any(|a| a == "run"));
@@ -635,12 +694,8 @@ mod tests {
             script_path: "/no/such/script/at/all.js".into(),
             url: "https://example.com/start".into(),
         };
-        let err = ObscuraSpawn::plan(
-            &cfg(Some("/opt/obscura"), Some("http://127.0.0.1:10443")),
-            "/ca.pem",
-            &op,
-        )
-        .expect_err("must fail closed when the script is unreadable");
+        let err = ObscuraSpawn::plan(&cfg(Some("/opt/obscura"), None), GOVERNED, "/ca.pem", &op)
+            .expect_err("must fail closed when the script is unreadable");
         assert!(matches!(err, SpawnPlanError::ScriptUnreadable(_)));
         // The Display carries the actionable context.
         assert!(err.to_string().contains("fetch --eval"), "{err}");
