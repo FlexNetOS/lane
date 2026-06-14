@@ -20,9 +20,13 @@ status: ACTIVE — full W2 network plane shipped (owner-directed). main @ e8b1e6
           per-node webpolicy deny-by-default + access-log → bridge). lane relay up/connect/trust/untrust/
           status. Hermetic two-node + governance tests. 391 default / 396 relay / 394 all-features green.
           iroh OPTIONAL/feature-gated (default build unchanged); crate MSRV → 1.89 (modern iroh).
-        NEXT (owner-gated, none pressing): implement the relay (iroh) DONE; remaining = Phase B seam
-        hardening, GovernedProxy upstream-proxy chaining, optional path-level TLS-MITM, real-fleet
-        (non-hermetic) relay validation across machines.
+        - Phase B SHIPPED: GovernedProxy upstream chaining + hardening (#49); optional path-level
+          TLS-MITM (`web_tls_inspect`, default off) + webpolicy deny_paths/allow_paths (#50) — the --ca
+          payoff (lane-CA leaf reuse, real-origin TLS validation intact). main @ 2769524, 411 default /
+          410 obscura green.
+        NEXT (owner-gated, none pressing): real-fleet (non-hermetic) relay validation across actual
+        machines/NAT (needs ≥2 real hosts, not CI-able) + optional DERP relay-server config; census-doc
+        obscura C→B tier retag. lane W2 network plane is functionally COMPLETE.
         Earlier this session: "next 5 tasks" delivered (option 1) — Phase-7 Round B 6/6 (multi-hop #38)
         + Phase-8 lane web seam mechanism (webpolicy #39, web seam #40, ADR-0001 ratified).
         - Product altitude: slim parity + full --json (#15-#25); Phase-7 Round A (#26/#27);
