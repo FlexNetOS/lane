@@ -471,11 +471,18 @@ CLI: `lane inspect [name]` (`src/cli/inspect.rs`). New dep: `crossterm` (already
 ## src/webpolicy + src/web  (lane-original — Phase 8; ADR-0001 lane↔obscura seam; no slim counterpart)
 
 The **governed-egress `lane web` seam** (ADR-0001 Option B): lane is the network control plane;
-obscura is a managed web-egress engine that lane spawns and **pins through lane's own proxy + policy**.
-obscura is an **external child process**, never a linked crate. The live spawn is behind the
-**`obscura` cargo feature** (`obscura = []`, no new dependency); the default build compiles none of the
-live spawn but **always** compiles + tests the pure layer (gate + spawn-plan). Deny-by-default
-everywhere.
+obscura is a managed web-egress engine that lane spawns and **pins through lane's own governed forward
+proxy + policy**. obscura is an **external child process**, never a linked crate. The live spawn is
+behind the **`obscura` cargo feature** (`obscura = []`, no new dependency); the default build compiles
+none of the live spawn but **always** compiles + tests the pure layer (gate + spawn-plan) **and the
+governed proxy** (`src/web/proxy.rs`). Deny-by-default everywhere.
+
+**Two-layer governance (defense in depth).** (1) The *entry* op's URL is gated by `web::authorize`
+(`webpolicy::check`) before any spawn. (2) lane RUNS its own **governed forward proxy** (`GovernedProxy`,
+`src/web/proxy.rs`) on an ephemeral loopback port and pins obscura's egress to it (obscura's `--proxy`
+points at lane), so **every connection obscura opens** — not just the entry URL — is independently
+policy-checked and access-logged. lane is the actual egress governor at the packet level (ADR-0001
+§2/§4), not merely a config-passer.
 
 `src/webpolicy` — pure, I/O-free, deny-by-default validator (the gate):
 ```rust
@@ -503,18 +510,35 @@ pub enum WebOp { Open { url: String }, Run { script_path: String, url: String } 
 impl WebOp { pub fn target(&self)->&str;  pub fn kind(&self)->&'static str; }        // "open"|"run"; target = policy-checked URL
 pub fn authorize(policy:&WebPolicy, op:&WebOp) -> Result<(), DenyReason>;            // the gate: runs webpolicy::check before any spawn
 pub struct ObscuraSpawn { pub program: String, pub args: Vec<String>, pub envs: Vec<(String,String)> }  // pure command PLAN (data, runs nothing)
-pub enum SpawnPlanError { MissingBin, MissingProxy, ScriptUnreadable(String) }       // seam-misconfigured / Run script unreadable (≠ a policy denial); Display+Error
-impl ObscuraSpawn { pub fn plan(cfg:&ObscuraConfig, ca_pem_path:&str, op:&WebOp) -> Result<ObscuraSpawn, SpawnPlanError>; }
+pub enum SpawnPlanError { MissingBin, ScriptUnreadable(String) }                     // seam-misconfigured / Run script unreadable (≠ a policy denial); Display+Error
+impl ObscuraSpawn { pub fn plan(cfg:&ObscuraConfig, proxy:&str, ca_pem_path:&str, op:&WebOp) -> Result<ObscuraSpawn, SpawnPlanError>; }
+//   `proxy` is supplied by the LIVE caller (lane's GovernedProxy::addr), NOT read from config — that is how obscura is pinned to lane.
 pub struct WebOutcome { pub op: &'static str, pub target: String, pub allowed: bool }
 pub async fn run(policy:&WebPolicy, cfg:&ObscuraConfig, ca_pem_path:&str, op:&WebOp) -> Result<WebOutcome>;
-//   gate FIRST (deny-by-default precedes any feature check) → then spawn (feature) / fail-closed (no feature)
+//   gate FIRST (deny-by-default precedes any feature check) → (feature) start GovernedProxy, plan pinned to its addr, spawn obscura, shut proxy down on exit / (no feature) fail-closed
 // #[cfg(not(feature="obscura"))] run_authorized() → Err: "obscura integration is not enabled … rebuild with --features obscura (Phase A1)"
+
+// src/web/proxy.rs — lane's OWN governed forward proxy (ALWAYS compiled + unit-tested; no obscura dep):
+pub struct GovernedProxy { /* loopback listener + accept task */ }
+impl GovernedProxy {
+  pub async fn start(policy: WebPolicy) -> Result<GovernedProxy>;                      // bind 127.0.0.1:0, spawn accept loop (direct egress)
+  pub async fn start_with_upstream(policy: WebPolicy, upstream: Option<String>) -> Result<GovernedProxy>; // v1: upstream=Some → fail-closed Err (chaining not yet supported)
+  pub fn addr(&self) -> String;        // "http://127.0.0.1:<port>" to hand obscura's --proxy
+  pub fn socket_addr(&self) -> SocketAddr;
+  pub fn shutdown(&self);              // abort accept loop; also runs on Drop (RAII)
+}
+//   CONNECT host:port → webpolicy.check_addr(host,port,Https): ALLOW → 200 + copy_bidirectional to upstream TcpStream; DENY → 403, never connects.
+//   absolute-form HTTP (GET http://host/…) → webpolicy.check(url): ALLOW → forward via in-tree reqwest, relay response; DENY → 403. Malformed/origin-form → 403 (fail-closed).
+//   EVERY request (ALLOW and DENY) logged via crate::log::info ("web-egress ALLOW/DENY …") — the single observability point (ADR §4).
+//   NO TLS MITM: webpolicy is host/port-level so CONNECT-level governance matches its granularity exactly. The plan's --ca is forward-compat for a future path-level MITM mode (not built).
 ```
 **Emitted obscura CLI (matches obscura's REAL `crates/obscura-cli` surface; requires obscura ≥ the
 Phase A1-2 `--ca` capability):** `plan()` emits obscura's **globals first**, then its `fetch`
 subcommand — there is no `open`/`run` subcommand in obscura.
-- Globals (before the subcommand), in order: `--proxy <obscura_proxy>`, `--ca <ca_pem_path>`,
-  `--allow-private-network`, and `--user-agent <ua>` when configured. `--allow-private-network` is
+- Globals (before the subcommand), in order: `--proxy <governed-proxy-addr>`, `--ca <ca_pem_path>`,
+  `--allow-private-network`, and `--user-agent <ua>` when configured. The `<governed-proxy-addr>` is
+  **lane's own `GovernedProxy::addr`** (a loopback URL), supplied by the live caller — not the user's
+  `obscura_proxy` config. `--allow-private-network` is
   **mandatory**: lane's proxy listens on loopback (`127.0.0.1`) and obscura BLOCKS loopback/RFC1918 by
   default via its SSRF guard, so without it obscura cannot even connect to lane's proxy. The governed
   spawn intentionally routes through lane's loopback listener, so private-network access to *reach the
@@ -528,15 +552,29 @@ subcommand — there is no `open`/`run` subcommand in obscura.
 
 **Egress-pinning contract (the heart of "under lane's control at the packet level"):** `plan()` is the
 pure function that enforces it and is fully unit-tested without obscura. The plan ALWAYS (a) takes
-`program` from config (`obscura_bin`), **never** the ambient `$PATH`; (b) sets `--proxy <obscura_proxy>`
-**and** the standard `HTTP_PROXY`/`HTTPS_PROXY` (+ lowercase) + `LANE_OBSCURA_PROXY` env so a
-flag-ignoring obscura build still cannot escape the pin; (c) trusts lane's CA via `--ca <ca_pem_path>`
-+ `SSL_CERT_FILE`/`LANE_CA` (obscura honors `SSL_CERT_FILE` as a CA fallback since A1-2). `plan()`
-refuses (`MissingBin`/`MissingProxy`/`ScriptUnreadable`) rather than emit an unpinned or empty-eval
-spawn. The live `run_authorized` (feature) builds a `tokio::process::Command` from the plan,
-logs the governed request via `crate::log::info` (one observable place for all agent web traffic), and
-waits on exit. CA path comes from `crate::cert::ca_cert_path()`. obscura must be built so `obscura_bin`
-points at a real binary (and, for stealth, built `--features stealth`).
+`program` from config (`obscura_bin`), **never** the ambient `$PATH`; (b) sets `--proxy <proxy>` — the
+`proxy` parameter the LIVE caller passes, which is `GovernedProxy::addr` — **and** the standard
+`HTTP_PROXY`/`HTTPS_PROXY` (+ lowercase) + `LANE_OBSCURA_PROXY` env so a flag-ignoring obscura build
+still cannot escape the pin; (c) trusts lane's CA via `--ca <ca_pem_path>` + `SSL_CERT_FILE`/`LANE_CA`
+(obscura honors `SSL_CERT_FILE` as a CA fallback since A1-2). `plan()` refuses
+(`MissingBin`/`ScriptUnreadable`) rather than emit an unpinned or empty-eval spawn.
+
+The live `run_authorized` (feature) is the wiring that makes lane the governor: it (1) starts a
+`GovernedProxy` on loopback with the same `WebPolicy`; (2) calls `plan(cfg, governed.addr(), …)` so
+obscura is pinned to **lane's** proxy; (3) builds a `tokio::process::Command` from the plan and logs the
+governed request via `crate::log::info`; (4) waits on obscura's exit, then **shuts the governed proxy
+down** (explicit `shutdown()` plus the `Drop` RAII guard). CA path comes from
+`crate::cert::ca_cert_path()`. obscura must be built so `obscura_bin` points at a real binary (and, for
+stealth, built `--features stealth`).
+
+**`obscura_proxy` = OPTIONAL upstream (semantics change).** `obscura_proxy` is no longer the proxy
+obscura points at (obscura points at lane's governed proxy). It is repurposed as the optional
+**upstream** lane's governed proxy chains *allowed* traffic through *after* governance — so an org can
+still route governed egress via a corporate proxy. **v1 implements the direct case fully**
+(`obscura_proxy` unset → governed proxy connects directly). If `obscura_proxy` IS set,
+`GovernedProxy::start_with_upstream` returns a clear, **fail-closed** error
+("upstream proxy chaining not yet supported; unset `obscura_proxy`") rather than silently ignoring it
+and leaking traffic direct — never a silent drop. Upstream chaining is future work.
 
 **Config keys** (in `src/config`, all `#[serde(default)]` → old `.lane.yaml` still parses; inert
 without the feature): `obscura_bin/obscura_proxy: Option<String>`, `obscura_stealth: bool`,
@@ -549,12 +587,18 @@ from the allow-lists (empty `web_allow_ports` keeps `{80,443}`).
 CLI: `lane web open <url>` / `lane web run <script> --url <url>` (`src/cli/web.rs`), both `--json`
 (`{op, target, allowed, error?}`). The command is **always present** (so `lane web --help` works in the
 default build); only the live action is gated. Flow: `config::load` → `web_policy()` → `obscura()` →
-`web::run(...)`. Build live: `cargo build --features obscura`.
+`web::run(...)`. In a `--features obscura` build this now: gates the entry URL → starts lane's governed
+proxy → spawns real obscura pinned through it → every egress connection is policy-checked + logged →
+shuts the proxy down on exit. The default build still fail-closes after the gate with the clear "rebuild
+with `--features obscura`" error. `obscura_bin` must point at a real obscura binary. Build live:
+`cargo build --features obscura`.
 
 **NEXT (deferred to Phase A1, NOT built here):** a daemon IPC / MCP `lane_web` dispatcher so agents
 reach the seam the same way they reach obscura's MCP — but through lane's gate (reusing `web::authorize`
-+ `webpolicy::check_ip` at resolution time). The CLI path above is the **v1 surface**; the live spawn
-wiring is untested against a real obscura until A1 lands.
++ `webpolicy::check_ip` at resolution time), and **upstream-proxy chaining** for the governed proxy
+(currently fail-closed). A future **path-level MITM mode** could use the already-emitted `--ca` to
+inspect TLS payloads; the current governed proxy is connection-level (host/port), matching webpolicy's
+granularity.
 
 ## src/setup  (⇐ internal/setup)
 
