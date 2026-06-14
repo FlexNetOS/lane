@@ -254,6 +254,11 @@ pub(crate) struct ShareArgs {
     /// Custom domain for this tunnel
     #[arg(long)]
     pub domain: Option<String>,
+    /// Proxy hop to route the tunnel dial through (repeatable, in order):
+    /// [scheme://][user:pass@]host:port, scheme socks5 (default) or http
+    /// (e.g. --hop socks5://proxy.corp:1080 --hop http://gw.corp:8080)
+    #[arg(long = "hop", value_name = "PROXY")]
+    pub hops: Vec<String>,
     /// Output as JSON (NDJSON event stream: connected, request*, disconnected)
     #[arg(long)]
     pub json: bool,

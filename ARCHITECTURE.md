@@ -263,10 +263,19 @@ pub fn render_server_down(port: u16, error: &str) -> String; // include_str! ass
 pub struct RequestEvent { pub method: String, pub path: String, pub status: u16, pub duration: Duration }
 pub struct ClientOptions { pub server_url: String, pub token: String, pub subdomain: String, pub domain: String,
     pub local_host: String /* empty ⇒ localhost; lane-original reverse-tunnel */, pub local_port: u16,
-    pub password: String, pub ttl: Option<Duration>, pub on_request: Option<Box<dyn Fn(RequestEvent)+Send+Sync>> }
+    pub password: String, pub ttl: Option<Duration>, pub on_request: Option<Box<dyn Fn(RequestEvent)+Send+Sync>>,
+    pub hops: Vec<HopSpec> /* empty ⇒ direct dial; lane-original multi-hop proxy chain */ }
 // forward.rs (lane-original, Phase 7): chisel-style reverse-tunnel spec
 pub struct ForwardSpec { pub remote_port: Option<u16>, pub local_host: String, pub local_port: u16 }
 impl FromStr for ForwardSpec; // "R:[remotePort:][localHost:]localPort" — remote_port advisory (lane assigns the URL)
+// hops.rs (lane-original, Phase 7): gost/chisel-style multi-hop proxy chain (CLIENT-SIDE dialing; wire format unchanged)
+pub enum HopScheme { Socks5, Http }            impl HopScheme { pub fn as_str(self) -> &'static str }
+pub struct HopAuth { pub username: String, pub password: String }
+pub struct HopSpec { pub scheme: HopScheme, pub host: String, pub port: u16, pub auth: Option<HopAuth> }
+impl HopSpec { pub fn authority(&self) -> String }
+impl FromStr for HopSpec; // "[scheme://][user:pass@]host:port" — scheme socks5(default)|http; port 1..=65535; host non-empty
+// dialer.rs (lane-original, Phase 7): builds the TCP byte-tunnel through the hop chain before the wss upgrade
+pub async fn dial_through_hops(hops: &[HopSpec], target: &str) -> Result<TcpStream>; // empty chain ⇒ direct connect; live cross-host path un-CI-able
 pub struct Client { /* opts, domain_url, conn */ }
 impl Client {
     pub fn new(opts: ClientOptions) -> Self;
@@ -282,6 +291,15 @@ via `reqwest` -> serialize_response -> `encode_frame` -> write binary. Ping ever
 exponential backoff (1s..30s). Close codes 4000 (TTL) / 4001 (dropped) -> stop. On forward error,
 respond with `render_server_down` as a 502 wire response and header `X-Lane-Error: connection-failed`.
 The read/forward loop runs as a spawned task; `connect` returns once registered.
+
+When `ClientOptions.hops` is non-empty, the dial is routed through the proxy chain (lane-original,
+Phase 7): `dialer::dial_through_hops` opens a TCP stream to hop 1, asks each hop to CONNECT to the
+next authority (SOCKS5 per RFC 1928/1929, or HTTP `CONNECT` per RFC 7231) ending at the tunnel
+server's `host:port`, then the `wss` TLS+WebSocket upgrade runs over that stream via
+`client_async_tls_with_config`. This is a purely **client-side dialing** decision — the wire format
+above is unchanged. The per-hop protocol encoders are unit-tested; the live chain across real
+intermediate proxies is un-CI-able (needs real SOCKS5/HTTP egress hosts), documented like ACME's
+live Let's Encrypt round-trip. No new dependency: the dialer is pure-Rust over `tokio` TCP.
 
 ## src/cert  (⇐ internal/cert)
 
