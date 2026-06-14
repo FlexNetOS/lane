@@ -6,10 +6,14 @@ worktree: (this session ran from ~/Desktop/meta/lane + per-item worktrees under 
 cycle_budget: 3            # completed cycles per session before handoff (override via RALPH_BUDGET)
 cycles_this_session: 3     # multi-hop, webpolicy, lane web seam
 cycles_total: 17           # carried across sessions (slim parity + --json + Phase-7 + Phase-8 seam)
-last_item: "next 5 tasks" (owner-directed) — Phase-7 Round B COMPLETED (6/6, multi-hop #38) +
-        Phase-8 lane web governed-egress seam MECHANISM shipped (webpolicy #39, web seam #40),
-        ADR-0001 ratified (owner authorized Option B). All 3 PRs merged; integrated main green.
-status: ACTIVE — owner-gated pivot pending. This session delivered the 5 tasks (option 1).
+last_item: PHASE A1 COMPLETE (obscura estate integration) — followed the "next 5 tasks" session.
+        Merged: obscura #2 (RED→GREEN baseline 271/0), #3 (custom-CA trust), #4 (fork identity→FlexNetOS);
+        lane #42 (lane-web seam reconciled to obscura's real CLI); network_hub #1 (obscura registered +
+        Rust-native validator). meta #35 (.meta.yaml triage) armed but blocked by unrelated meta-main
+        Format failure. A1-5 MCP verified via obscura's mcp_client e2e suite. See phase-a1-obscura.md.
+status: ACTIVE — Phase A1 done. NEXT (owner sequence 1→4→3, step 3): return to lane → lane DONE-gate.
+        Earlier this session: "next 5 tasks" delivered (option 1) — Phase-7 Round B 6/6 (multi-hop #38)
+        + Phase-8 lane web seam mechanism (webpolicy #39, web seam #40, ADR-0001 ratified).
         - Product altitude: slim parity + full --json (#15-#25); Phase-7 Round A (#26/#27);
           Round B 6/6 (#32-#36, #38). 351 tests green default / 350 with --features obscura;
           clippy clean both, fmt clean.
