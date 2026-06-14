@@ -43,12 +43,14 @@ pub enum WebOp {
         url: String,
     },
     /// Run an automation script against a target URL. The script is a local
-    /// file path obscura executes; `url` is the initial navigation target and
-    /// the policy-checked egress target.
+    /// file path whose **contents** are read at plan time and handed to
+    /// obscura's `fetch --eval <JS>` (obscura's `--eval` takes a JS string, not
+    /// a path); `url` is the navigation target and the policy-checked egress
+    /// target.
     Run {
-        /// Path to the local automation script obscura runs.
+        /// Path to the local JavaScript file obscura evaluates against the page.
         script_path: String,
-        /// The initial navigation target (the policy-checked URL).
+        /// The navigation target (the policy-checked URL).
         url: String,
     },
 }
@@ -119,6 +121,11 @@ pub enum SpawnPlanError {
     /// lane-controlled listener; refusing to plan an unpinned spawn is what
     /// keeps obscura under lane's control.
     MissingProxy,
+    /// A [`WebOp::Run`]'s `script_path` could not be read. obscura's `fetch
+    /// --eval` takes a JS *string*, so lane reads the file at plan time;
+    /// failing to read it fails closed (the carried `String` is the I/O error)
+    /// rather than silently sending an empty eval.
+    ScriptUnreadable(String),
 }
 
 impl std::fmt::Display for SpawnPlanError {
@@ -132,6 +139,9 @@ impl std::fmt::Display for SpawnPlanError {
                 "obscura proxy not configured: set `obscura_proxy` (or LANE_OBSCURA_PROXY); \
                  egress must be pinned through lane",
             ),
+            SpawnPlanError::ScriptUnreadable(err) => {
+                write!(f, "cannot read automation script for `fetch --eval`: {err}")
+            }
         }
     }
 }
@@ -142,14 +152,26 @@ impl ObscuraSpawn {
     /// Build the spawn plan for `op` from the resolved obscura `config`.
     ///
     /// Pure: returns the planned [`ObscuraSpawn`] as data, or a
-    /// [`SpawnPlanError`] if the egress-pinning invariants cannot be met. The
-    /// resulting plan ALWAYS:
+    /// [`SpawnPlanError`] if the egress-pinning invariants cannot be met (or a
+    /// [`WebOp::Run`] script cannot be read). The resulting plan matches
+    /// obscura's REAL CLI and ALWAYS:
     ///
     /// - takes `program` from `config.bin` (never `$PATH`),
-    /// - sets `--proxy <config.proxy>` and the standard `HTTP_PROXY`/`HTTPS_PROXY`
-    ///   (+ lowercase) env so obscura's egress is pinned through lane, and
-    /// - trusts lane's CA via `--ca <ca_pem_path>` and the common CA-bundle env
-    ///   vars, so the lane-terminated TLS validates inside obscura.
+    /// - emits, as **globals** (before the subcommand), `--proxy <config.proxy>`,
+    ///   `--ca <ca_pem_path>`, and `--allow-private-network` (lane's proxy
+    ///   listens on loopback and obscura blocks loopback/RFC1918 by default, so
+    ///   without this obscura cannot even reach lane's proxy), plus
+    ///   `--user-agent <ua>` when configured, and
+    /// - additionally pins egress + CA trust via the standard
+    ///   `HTTP_PROXY`/`HTTPS_PROXY` (+ lowercase) and CA-bundle env vars so a
+    ///   flag-ignoring obscura build still cannot escape the pin.
+    ///
+    /// The subcommand is obscura's `fetch <url>`: a [`WebOp::Open`] maps to
+    /// `fetch <url>`, and a [`WebOp::Run`] reads the script file's contents and
+    /// maps to `fetch <url> --eval <JS-CONTENTS>` (obscura's `--eval` takes a JS
+    /// string, not a path). `--stealth` (when `config.stealth`) is appended
+    /// **after** the `fetch` subcommand because it is per-subcommand in obscura,
+    /// not a global (and requires obscura to be built `--features stealth`).
     pub fn plan(
         config: &ObscuraConfig,
         ca_pem_path: &str,
@@ -158,37 +180,48 @@ impl ObscuraSpawn {
         let program = config.bin.clone().ok_or(SpawnPlanError::MissingBin)?;
         let proxy = config.proxy.clone().ok_or(SpawnPlanError::MissingProxy)?;
 
-        // Egress pinning (`--proxy`, also surfaced via env below for obscura
-        // builds that honor proxy env rather than a flag) + CA trust (`--ca`) so
-        // the lane-terminated TLS validates in obscura: every request goes
-        // through lane and trusts lane's CA.
+        // Globals (before the subcommand): egress pinning (`--proxy`, also
+        // surfaced via env below for builds that honor proxy env over a flag) +
+        // CA trust (`--ca`) so lane-terminated TLS validates in obscura, and
+        // `--allow-private-network` so obscura's SSRF guard permits reaching
+        // lane's loopback proxy (the governed spawn intentionally routes through
+        // lane's 127.0.0.1 listener — egress stays pinned to lane).
         let mut args = vec![
             "--proxy".to_string(),
             proxy.clone(),
             "--ca".to_string(),
             ca_pem_path.to_string(),
+            "--allow-private-network".to_string(),
         ];
 
-        if config.stealth {
-            args.push("--stealth".to_string());
-        }
         if let Some(ua) = &config.user_agent {
             args.push("--user-agent".to_string());
             args.push(ua.clone());
         }
 
-        // The op itself.
+        // The op itself — always obscura's `fetch <url>` subcommand.
         match op {
             WebOp::Open { url } => {
-                args.push("open".to_string());
+                args.push("fetch".to_string());
                 args.push(url.clone());
             }
             WebOp::Run { script_path, url } => {
-                args.push("run".to_string());
-                args.push(script_path.clone());
-                args.push("--url".to_string());
+                // obscura's `--eval` takes a JS string, not a path: read the
+                // script at plan time and fail closed if it is unreadable
+                // (never send an empty eval).
+                let script = std::fs::read_to_string(script_path)
+                    .map_err(|e| SpawnPlanError::ScriptUnreadable(e.to_string()))?;
+                args.push("fetch".to_string());
                 args.push(url.clone());
+                args.push("--eval".to_string());
+                args.push(script);
             }
+        }
+
+        // `--stealth` is PER-SUBCOMMAND in obscura (on `fetch`), not a global,
+        // and needs obscura built `--features stealth`. Emit it after `fetch`.
+        if config.stealth {
+            args.push("--stealth".to_string());
         }
 
         // Pin egress and CA trust via env too — belt-and-suspenders so an obscura
@@ -301,6 +334,7 @@ async fn run_authorized(_config: &ObscuraConfig, _ca_pem_path: &str, _op: &WebOp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     fn cfg(bin: Option<&str>, proxy: Option<&str>) -> ObscuraConfig {
         ObscuraConfig {
@@ -442,9 +476,31 @@ mod tests {
         // Program is the explicit config path, never a bare name on $PATH.
         assert_eq!(plan.program, "/opt/obscura/obscura");
 
-        // --proxy flag is present and points at the lane listener.
+        // --proxy flag is present (a global) and points at the lane listener.
         let proxy_idx = plan.args.iter().position(|a| a == "--proxy").expect("flag");
         assert_eq!(plan.args[proxy_idx + 1], "http://127.0.0.1:10443");
+
+        // --allow-private-network is a global so obscura's SSRF guard permits
+        // reaching lane's loopback proxy, and it precedes the `fetch`
+        // subcommand.
+        let apn_idx = plan
+            .args
+            .iter()
+            .position(|a| a == "--allow-private-network")
+            .expect("--allow-private-network must be present");
+        let fetch_idx = plan
+            .args
+            .iter()
+            .position(|a| a == "fetch")
+            .expect("fetch subcommand");
+        assert!(
+            apn_idx < fetch_idx,
+            "--allow-private-network must be a global (before `fetch`)"
+        );
+
+        // The subcommand is `fetch <url>`, never the old `open`.
+        assert!(!plan.args.iter().any(|a| a == "open"));
+        assert_eq!(plan.args[fetch_idx + 1], "https://example.com/");
 
         // Proxy env is set on EVERY standard key (flag-ignoring builds can't
         // escape the pin).
@@ -481,13 +537,31 @@ mod tests {
             user_agent: Some("lane-web/1".into()),
         };
         let plan = ObscuraSpawn::plan(&config, "/ca.pem", &op).expect("plan");
-        assert!(plan.args.iter().any(|a| a == "--stealth"));
+
+        // --user-agent is a global: it precedes the `fetch` subcommand.
         let ua_idx = plan
             .args
             .iter()
             .position(|a| a == "--user-agent")
             .expect("ua flag");
         assert_eq!(plan.args[ua_idx + 1], "lane-web/1");
+        let fetch_idx = plan
+            .args
+            .iter()
+            .position(|a| a == "fetch")
+            .expect("fetch subcommand");
+        assert!(ua_idx < fetch_idx, "--user-agent must be a global");
+
+        // --stealth is PER-SUBCOMMAND: it must come AFTER `fetch <url>`.
+        let stealth_idx = plan
+            .args
+            .iter()
+            .position(|a| a == "--stealth")
+            .expect("stealth flag");
+        assert!(
+            stealth_idx > fetch_idx,
+            "--stealth must follow the `fetch` subcommand"
+        );
     }
 
     #[test]
@@ -506,9 +580,16 @@ mod tests {
     }
 
     #[test]
-    fn plan_run_op_carries_script_and_url() {
+    fn plan_run_op_reads_script_into_eval() {
+        // obscura has no `run` subcommand: a Run op maps to
+        // `fetch <url> --eval <SCRIPT-CONTENTS>`, with the script file read at
+        // plan time (its contents, not its path).
+        let tmp = TempDir::new().unwrap();
+        let script_path = tmp.path().join("automate.js");
+        std::fs::write(&script_path, "document.title").unwrap();
+
         let op = WebOp::Run {
-            script_path: "/tmp/automate.js".into(),
+            script_path: script_path.to_string_lossy().into_owned(),
             url: "https://example.com/start".into(),
         };
         let plan = ObscuraSpawn::plan(
@@ -517,9 +598,52 @@ mod tests {
             &op,
         )
         .expect("plan");
-        assert!(plan.args.iter().any(|a| a == "run"));
-        assert!(plan.args.iter().any(|a| a == "/tmp/automate.js"));
-        assert!(plan.args.iter().any(|a| a == "https://example.com/start"));
+
+        // No `run` subcommand and no `--url` flag — obscura has neither.
+        assert!(!plan.args.iter().any(|a| a == "run"));
+        assert!(!plan.args.iter().any(|a| a == "--url"));
+
+        // `fetch <url>` carries the URL positionally.
+        let fetch_idx = plan
+            .args
+            .iter()
+            .position(|a| a == "fetch")
+            .expect("fetch subcommand");
+        assert_eq!(plan.args[fetch_idx + 1], "https://example.com/start");
+
+        // `--eval` carries the SCRIPT CONTENTS, never the path.
+        let eval_idx = plan
+            .args
+            .iter()
+            .position(|a| a == "--eval")
+            .expect("--eval flag");
+        assert_eq!(plan.args[eval_idx + 1], "document.title");
+        assert!(
+            !plan
+                .args
+                .iter()
+                .any(|a| a == &script_path.to_string_lossy()),
+            "the script PATH must not appear in argv (only its contents)"
+        );
+    }
+
+    #[test]
+    fn plan_run_op_fails_closed_on_unreadable_script() {
+        // A Run op whose script cannot be read fails closed with
+        // ScriptUnreadable — never a silent empty `--eval`.
+        let op = WebOp::Run {
+            script_path: "/no/such/script/at/all.js".into(),
+            url: "https://example.com/start".into(),
+        };
+        let err = ObscuraSpawn::plan(
+            &cfg(Some("/opt/obscura"), Some("http://127.0.0.1:10443")),
+            "/ca.pem",
+            &op,
+        )
+        .expect_err("must fail closed when the script is unreadable");
+        assert!(matches!(err, SpawnPlanError::ScriptUnreadable(_)));
+        // The Display carries the actionable context.
+        assert!(err.to_string().contains("fetch --eval"), "{err}");
     }
 
     // --- run end-to-end -----------------------------------------------------
