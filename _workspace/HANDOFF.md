@@ -1,61 +1,65 @@
-# HANDOFF — lane (session 2026-06-13)
+# HANDOFF — lane (session 2026-06-13, "next 5 tasks")
 
 closed_utc: 2026-06-13   branch: main   worktree: ~/Desktop/meta/lane (develop in a fresh worktree per CLAUDE.md)
-cycle_budget: n/a (interactive owner-driven session, not an autonomous lane-loop run)
-last_item: Phase-7 Round B feature implementation
-next_item: **OWNER DECISION PENDING** — (a) implement multi-hop tunnel (last Round B item) OR (b) declare Phase A2 done and pivot to Phase A1 (obscura integration)
-orchestrator_phase: n/a   last_agent: n/a   gate_status: PASS (261 tests, clippy clean default + --features acme, fmt clean)   pr_url: all merged (see below)
+cycle_budget: 3   cycles_this_session: 3 (RESET to 0 on resume)
+last_item: Phase-7 Round B completion + Phase-8 lane web seam mechanism
+next_item: **OWNER SEQUENCE 1→4→3, step 4** — PIVOT to Phase A1 = obscura estate integration
+  (repo FlexNetOS/obscura), the real gate that un-gates lane's live `lane web` path; then step 3 = DONE-gate lane.
+orchestrator_phase: n/a   gate_status: PASS   drift_status: clean (100% Rust-native; only .rs/.md/.toml; obscura is a child process, no new dep)
+cargo_gate: fmt=clean  clippy=clean (default AND --features obscura, -D warnings)  test=351 default / 350 --features obscura
+base_sha: a509066 (origin/main, includes #38/#39/#40)
+pr_url: all merged — #38, #39, #40
 
-## What this session did
-1. **Stood up the `.handoff` continuity kernel** + P7 ledger-residency guard (PR #29).
-2. **Traced lane's TRUE vision/north-star** (owner: "it's a lot bigger than you think"). Wrote
-   `docs/VISION.md` + drafted the **W2 lane↔obscura seam ADR** (`docs/adr/ADR-0001-…`). Found the
-   reference repos (slim source at `/home/drdave/Downloads/tmp/router-lane/slim-extract/slim-main`;
-   workspace-level set in `network_hub/README.md`). (PR #30)
-3. **Re-sequenced W2 per owner**: Phase A (A1 obscura integration + A2 lane Phase 7) **gates** Phase B
-   (the Option-B governed-egress seam) → Phase C (cross-machine lane relay). Corrected the inherited
-   error that obscura is "empty" — it's a real **8-crate built engine** (188 commits). (PR #31)
-4. **Phase-7 Round B — 5 of 6 features shipped** (each its own merged PR, +tests, ARCHITECTURE+docs
-   synced, 100% Rust-native):
-   - `lane install --service` — systemd/launchd daemon auto-start (PR #32)
-   - `lane share R:[remote:][host:]port` — reverse-tunnel forward (PR #33)
-   - `lane config template` — starter `.lane.yaml` (PR #34)
-   - `lane inspect` — live request-inspector TUI (crossterm) (PR #35)
-   - `lane start --acme` — **feature-gated** Let's Encrypt issuance (instant-acme behind `--features acme`) (PR #36)
+## What this session did (owner's "implement the next 5 tasks" = option 1: multi-hop + lane web seam)
+The lane autonomous backlog had exactly ONE non-gated item left (multi-hop); the rest was owner-gated.
+Owner chose option 1 (multi-hop + the Phase-8 `lane web` seam) — selecting it RATIFIED ADR-0001.
+
+1. **Multi-hop tunnel** (last Phase-7 Round B item) — **PR #38 MERGED**. `lane share --hop
+   [scheme://][user:pass@]host:port` (socks5 default | http) chained before the wss dial. New
+   `src/tunnel/hops.rs` + `src/tunnel/dialer.rs` (SOCKS5 RFC 1928/1929 + HTTP CONNECT, tokio TCP,
+   NO wire change, NO new dep, creds redacted). 261→301 tests. Phase-7 Round B now 6/6.
+2. **webpolicy** (Phase-8 seam foundation) — **PR #39 MERGED**. `src/webpolicy.rs`: pure deny-by-default
+   SSRF validator (loopback/RFC1918/ULA/link-local incl. 169.254.169.254/CGNAT/non-http/port-allowlist;
+   IPv4-mapped-v6 + userinfo-injection hardening; exact+suffix allowlist; check/check_addr/check_ip).
+   +28 tests.
+3. **lane web governed-egress seam** (ADR-0001 Option B mechanism) — **PR #40 MERGED**. `src/web/mod.rs`
+   (`WebOp`, `authorize()` deny-by-default gate via webpolicy, `ObscuraSpawn::plan()` pure pinned-argv+env
+   builder — egress ALWAYS proxied, bin from config never $PATH — `#[cfg(feature="obscura")]` live
+   tokio::process spawn + access-log) + `lane web open/run` CLI (`--json`) + config `obscura_*`/web-allowlist
+   (`#[serde(default)]`, `LANE_OBSCURA_*` env). `obscura = []` feature, NO new dep. ADR-0001 ratified.
+   329→351 tests (350 w/ --features obscura).
 
 landed_this_session:
-  - 15c468c feat(acme): lane start --acme — feature-gated Let's Encrypt issuance (#36)
-  - ae13697 feat(inspect): lane inspect — live request-inspector TUI (#35)
-  - 48b0c90 feat(config): lane config template — scaffold a starter .lane.yaml (#34)
-  - 6e1e4ed feat(share): reverse-tunnel forward syntax (#33)
-  - a6d8884 feat(install): lane install --service — systemd/launchd auto-start (#32)
-  - e516994 docs(roadmap): re-sequence W2 — Phase A gates Phase B (#31)
-  - 2c8f660 docs(vision): trace lane's north-star + draft W2 seam ADR (#30)
-  - 4637fd4 chore(.handoff): add P7 ledger-residency .gitignore guard (#29)
+  - a509066 feat(web): lane web governed-egress seam — ADR-0001 Option B (#40)
+  - dd9f9f9 feat(web): webpolicy — deny-by-default SSRF egress validator (#39)
+  - 0e2236c feat(share): multi-hop tunnel — lane share --hop proxy chains (#38)
 
 findings:
-  - Vision/roadmap: `docs/VISION.md` (the two altitudes; network plane; lane relay standing wall).
-  - W2 seam design (Accepted, gated on Phase A): `docs/adr/ADR-0001-lane-obscura-network-seam.md`.
-  - Phase-7 backlog status: `_workspace/backlog.md` (Round B 5/6 done; multi-hop is the only `[ ]`).
+  - lane Phase-7 (A2) is now COMPLETE (Round A + Round B 6/6). The `lane web` seam MECHANISM is in,
+    fail-closed. lane's product + local-seam work is done pending the obscura integration.
+  - The seam is built but INERT until obscura is integrated: `lane web` (default build) returns a clear
+    "rebuild with --features obscura (Phase A1)" error; even with the feature, it needs a real obscura
+    binary (`obscura_bin`) + a lane proxy listener to do anything live.
 
 decisions_and_dead_ends:
-  - **Sequencing (owner)**: Phase A (obscura built/integrated + lane Phase 7 done) MUST finish before
-    Phase B (seam). Phase B design = Option B (governed-egress proxy seam). Do NOT start the seam yet.
-  - **obscura is NOT empty** — real 8-crate engine; "needs implementation" = estate integration/build,
-    not greenfield. (Phase A1, separate repo `FlexNetOS/obscura`, its own worktree/session.)
-  - **ring invariant** = runtime provider install, NOT the dep graph. aws-lc-rs is already in lane's
-    default tree (via reqwest rustls-tls); the `acme` feature introduces nothing new. Don't re-litigate.
-  - **Un-CI-able live paths** (ACME LE round-trip; multi-hop cross-server): feature-gate the live
-    driver, keep pure parts + the mechanism always-compiled + tested, fail-closed when off.
-  - Reusable: read vendored crate source in `~/.cargo/registry/src` to pin an external API offline.
-
-icm_stored: decisions-lane, context-lane, lessons-lane (this session's lessons + reusable techniques)
+  - **owner-gated** = the loop may not unilaterally commit lane to a major network-architecture direction
+    that isn't human-ratified (the seam ADR was `Proposed`; the relay needs its own ADR). Owner picking
+    option 1 ratified the seam. The relay + network_hub registry remain gated (each needs its own ADR).
+  - **Build the mechanism ahead of its live infra, feature-gated + fail-closed** — the proven lane pattern
+    (ACME, multi-hop): pure parts always-compiled + fully tested, live driver behind a cargo feature.
+    This let the seam ship cleanly BEFORE obscura A1, honoring the A1-gates-B sequencing (mechanism ≠ live).
+  - **obscura is Option-A-rejected as a crate dep** — it is a CHILD PROCESS (Option B), so the `obscura`
+    feature added NO dependency.
+  - Daemon/MCP `lane_web` dispatcher: DOCUMENTED as the next step, NOT built — it can't be exercised until
+    obscura's MCP surface is integrated (Phase A1). CLI is the v1 surface.
 
 verify_on_resume: |
-  cd <fresh worktree off origin/main>
-  cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test   # expect 261 green
-  cargo clippy --all-targets --features acme -- -D warnings                            # ACME live path lints clean
+  cd <fresh worktree off origin/main @ a509066+>
+  cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test            # expect 351 green
+  cargo clippy --all-targets --features obscura -- -D warnings && cargo test --features obscura  # expect 350 green
 
-resume_command: continue from this HANDOFF.md — answer the owner's pending (a)/(b) decision first.
-  - (a) multi-hop tunnel: client-side wire/CLI fully implemented + tested, cross-server hop gated/documented like ACME.
-  - (b) Phase A1 obscura integration (the real gate on the W2 seam) — preferred per the north-star.
+resume_command: continue the owner sequence 1→4→3 at STEP 4 — pivot the loop to Phase A1 (obscura estate
+  integration in FlexNetOS/obscura: build+verify its 8 crates + exercise its MCP surface as a FlexNetOS
+  tool). That is the gate that un-gates lane's live `lane web`. After A1, return to lane: STEP 3 = run the
+  lane DONE gate (build+release+test+fmt+clippy green, backlog clear) and decide whether to wire the live
+  obscura path. The lane Phase-8 relay + network_hub items stay owner-gated (own ADRs).

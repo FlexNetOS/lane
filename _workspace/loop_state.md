@@ -1,21 +1,26 @@
 # Loop state — lane-loop
 session_started: 2026-06-13 (UTC date; scripts can't read the clock)
 loop: lane-loop
-branch: main (interactive owner-driven session; features shipped via per-feature worktrees+PRs)
-worktree: (handoff written from ~/Desktop/meta/.worktrees/lane-handoff/lane)
+branch: main (features shipped via per-feature worktrees+PRs; auto-merge on green)
+worktree: (this session ran from ~/Desktop/meta/lane + per-item worktrees under ../.worktrees/)
 cycle_budget: 3            # completed cycles per session before handoff (override via RALPH_BUDGET)
-cycles_this_session: 0     # interactive session, not autonomous loop cycles
-cycles_total: 14           # carried across sessions (slim parity + --json loop)
-last_item: Phase-7 Round B — 5 of 6 features shipped + merged (install-service #32, reverse-tunnel #33,
-        config-template #34, inspect-TUI #35, ACME #36). Vision traced + W2 re-sequenced (#30/#31).
-status: ACTIVE — handing off. See _workspace/HANDOFF.md (cold-start checkpoint).
+cycles_this_session: 3     # multi-hop, webpolicy, lane web seam
+cycles_total: 17           # carried across sessions (slim parity + --json + Phase-7 + Phase-8 seam)
+last_item: "next 5 tasks" (owner-directed) — Phase-7 Round B COMPLETED (6/6, multi-hop #38) +
+        Phase-8 lane web governed-egress seam MECHANISM shipped (webpolicy #39, web seam #40),
+        ADR-0001 ratified (owner authorized Option B). All 3 PRs merged; integrated main green.
+status: ACTIVE — owner-gated pivot pending. This session delivered the 5 tasks (option 1).
         - Product altitude: slim parity + full --json (#15-#25); Phase-7 Round A (#26/#27);
-          Round B 5/6 (#32-#36). 261 tests green; clippy clean default AND --features acme.
+          Round B 6/6 (#32-#36, #38). 351 tests green default / 350 with --features obscura;
+          clippy clean both, fmt clean.
         - Fleet altitude: lane = network plane (Tier B). North-star = "lane owns network
-          engineering/control; obscura upgrades it with stealth agent web access". See docs/VISION.md.
-        - SEQUENCING (owner): Phase A (A1 obscura integration + A2 lane Phase 7) GATES Phase B
-          (Option-B lane↔obscura seam, ADR-0001 docs/adr/) → Phase C (cross-machine lane relay).
-        - NEXT — OWNER DECISION PENDING: (a) multi-hop tunnel (last Round B item; cross-server hop
-          gated/documented like ACME) OR (b) Phase A2 done → pivot to Phase A1 obscura integration
-          (preferred per north-star). Resume from _workspace/HANDOFF.md.
+          engineering/control; obscura upgrades it with stealth agent web access". docs/VISION.md.
+        - Phase-8 seam: ADR-0001 RATIFIED (Option B). `lane web` mechanism SHIPPED feature-gated
+          (`obscura = []`), fail-closed. webpolicy (deny-by-default SSRF gate) + src/web/ (pure
+          plan/authorize + #[cfg(feature)] live spawn) + CLI + config. NO new dep; live obscura
+          child-spawn + daemon/MCP `lane_web` op DEFERRED to Phase A1 (obscura integration).
+        - NEXT (owner sequence: 1→4→3): (4) PIVOT to Phase A1 = obscura estate integration in the
+          SEPARATE repo FlexNetOS/obscura (the real gate that un-gates the live `lane web` path),
+          then (3) DONE-gate lane. Remaining lane Phase-8 items (lane relay, network_hub registry)
+          stay owner-gated (each needs its own ADR).
 last_update: 2026-06-13
