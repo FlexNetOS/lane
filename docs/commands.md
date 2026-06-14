@@ -369,7 +369,7 @@ Expose a local port to the internet via a `lane.show` tunnel. Requires `lane log
 ### Synopsis
 
 ```
-lane share (--port <port> | R:[remotePort:][localHost:]localPort) [--subdomain <name> | --domain <fqdn>] [--password <secret>] [--ttl <duration>] [--json]
+lane share (--port <port> | R:[remotePort:][localHost:]localPort) [--subdomain <name> | --domain <fqdn>] [--password <secret>] [--ttl <duration>] [--hop <proxy> ...] [--json]
 ```
 
 ### Description
@@ -403,6 +403,26 @@ number is **advisory** (lane maps it to the assigned URL); the honored part is t
 `host:port`. Exactly one of `--port` or a forward spec must be given (`cannot use --port and a
 forward spec together` / `specify a local port: ...`).
 
+#### Multi-hop proxy chains (`--hop`)
+
+For developers behind a NAT/firewall whose only egress to the public internet is through one or
+more intermediate proxy hops (e.g. a company VPN's SOCKS5 or HTTP-`CONNECT` gateway), repeatable
+`--hop` flags route the tunnel **dial** through those hops, in order, before the `wss` upgrade
+(gost/chisel-style). Each hop is `[scheme://][user:pass@]host:port`, where `scheme` is `socks5`
+(the default) or `http`. The chain is purely a **client-side dialing** decision: the wire protocol
+between the client and the tunnel server is unchanged, so chaining never affects how requests are
+framed or forwarded. With no `--hop` the dial is direct (the default behavior).
+
+The first hop is dialed over TCP; each hop is then asked to CONNECT to the next authority, with the
+last hop connecting to the tunnel server, after which the `wss` TLS+WebSocket session runs over the
+resulting byte tunnel. SOCKS5 username/password auth (RFC 1929) and HTTP `Proxy-Authorization:
+Basic` are supported via the `user:pass@` form; credentials are **redacted** in all human and
+`--json` output (only `scheme://host:port` is shown).
+
+> The live multi-hop path requires reachable, real intermediate proxies, so — like the live ACME
+> issuance round-trip — it cannot be exercised in CI. The per-hop protocol encoding is unit-tested;
+> the cross-host dial is validated against your own proxies at runtime.
+
 ### Arguments
 
 | Argument | Type | Meaning |
@@ -418,7 +438,8 @@ forward spec together` / `specify a local port: ...`).
 | `--password` | | string | _(none)_ | Require this password for tunnel access. Pro feature. |
 | `--ttl` | | duration | _(none)_ | Tunnel time-to-live, e.g. `30m`, `1h`. Free tier: max 1h. Pro: unlimited. When elapsed, the tunnel disconnects automatically. |
 | `--domain` | | string | _(none)_ | Serve the tunnel on a custom domain you have added and verified (see `lane domain`). Pro feature. Mutually exclusive with `--subdomain`. |
-| `--json` | | bool | `false` | Emit an NDJSON event stream instead of the human output: one `{ "event": "connected", "url", "port", "local", "domain_url"?, "password"? }` on connect, a `{ "event": "request", "method", "path", "status", "duration" }` per proxied request, and `{ "event": "disconnected" }` on Ctrl+C. The Pro-subscription path emits `{ "event": "error", "error", "upgrade_url" }`. Scripts read the first line to capture the public `url`. |
+| `--hop` | | string (repeatable) | _(none)_ | A proxy hop to route the tunnel dial through, in flag order: `[scheme://][user:pass@]host:port` with `scheme` ∈ `socks5` (default) or `http`. Repeat to chain multiple hops. `host` must be non-empty and `port` 1–65535 (`invalid port <n>: must be between 1 and 65535`); an unknown scheme errors (`unknown proxy scheme ... (want socks5 or http)`). Credentials are redacted in output. |
+| `--json` | | bool | `false` | Emit an NDJSON event stream instead of the human output: one `{ "event": "connected", "url", "port", "local", "domain_url"?, "password"?, "hops"? }` on connect (`hops` is the credential-redacted `scheme://host:port` chain, present only when `--hop` is used), a `{ "event": "request", "method", "path", "status", "duration" }` per proxied request, and `{ "event": "disconnected" }` on Ctrl+C. The Pro-subscription path emits `{ "event": "error", "error", "upgrade_url" }`. Scripts read the first line to capture the public `url`. |
 
 ### Examples
 
@@ -432,6 +453,11 @@ lane share --port 3000 --json                       # NDJSON stream; capture the
 lane share R:8080                                   # reverse-tunnel: forward to localhost:8080
 lane share R:3000:localhost:8080                     # chisel-style: remote 3000 (advisory) → localhost:8080
 lane share R:127.0.0.1:9000 --subdomain demo         # forward to 127.0.0.1:9000 on a vanity subdomain
+lane share --port 3000 --hop socks5://proxy.corp:1080            # dial out through one SOCKS5 hop
+lane share --port 3000 --hop http://gw.corp:8080                 # dial out through an HTTP CONNECT proxy
+lane share --port 3000 \
+  --hop socks5://alice:s3cret@proxy.corp:1080 \
+  --hop http://gw.corp:8080                                      # chain two hops (auth on the first)
 ```
 
 ---

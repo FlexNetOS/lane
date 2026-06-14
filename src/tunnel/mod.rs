@@ -9,10 +9,13 @@
 //! local server is unreachable.
 
 pub mod client;
+pub mod dialer;
 pub mod forward;
+pub mod hops;
 pub mod pages;
 pub mod subdomain;
 
 pub use client::{Client, ClientOptions, RequestEvent};
 pub use forward::ForwardSpec;
+pub use hops::{HopAuth, HopScheme, HopSpec};
 pub use subdomain::validate_subdomain;

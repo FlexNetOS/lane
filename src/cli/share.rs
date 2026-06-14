@@ -1,11 +1,13 @@
 //! `lane share` — expose a local upstream via a lane.show tunnel.
 //!
-//! Faithful port of `cmd/share.go`, plus a lane-original reverse-tunnel forward
-//! spec (`R:[remotePort:][localHost:]localPort`, chisel-style) so the tunnel can
-//! forward to a specific local upstream instead of just `localhost:<--port>`.
-//! Validates the target and subdomain, requires authentication, opens a tunnel
-//! [`Client`], and prints the public URL plus a live per-request log until
-//! interrupted with Ctrl+C.
+//! Faithful port of `cmd/share.go`, plus two lane-original extensions: a
+//! reverse-tunnel forward spec (`R:[remotePort:][localHost:]localPort`,
+//! chisel-style) so the tunnel can forward to a specific local upstream instead
+//! of just `localhost:<--port>`, and a `--hop` multi-hop proxy chain (gost-style)
+//! that routes the tunnel dial through one or more intermediate SOCKS5/HTTP
+//! proxies before the `wss` upgrade. Validates the target, hops, and subdomain,
+//! requires authentication, opens a tunnel [`Client`], and prints the public URL
+//! plus a live per-request log until interrupted with Ctrl+C.
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Local;
@@ -14,7 +16,7 @@ use crate::auth;
 use crate::config;
 use crate::log;
 use crate::term;
-use crate::tunnel::{self, Client, ClientOptions, ForwardSpec, RequestEvent};
+use crate::tunnel::{self, Client, ClientOptions, ForwardSpec, HopSpec, RequestEvent};
 
 /// Resolve the local upstream `(host, port)` from either `--port` (host =
 /// `localhost`) or a reverse-tunnel forward spec, enforcing exactly-one. Pure,
@@ -42,9 +44,16 @@ fn resolve_target(port: Option<u16>, forward: Option<&str>) -> Result<(String, u
     }
 }
 
+/// Parse and validate the ordered multi-hop proxy chain from repeated `--hop`
+/// flags. Empty input ⇒ empty chain (direct dial). Pure, so it is unit-testable.
+fn resolve_hops(specs: &[String]) -> Result<Vec<HopSpec>> {
+    specs.iter().map(|s| s.parse::<HopSpec>()).collect()
+}
+
 /// Run the `share` command.
 pub async fn run(args: &super::ShareArgs) -> Result<()> {
     let (local_host, port) = resolve_target(args.port, args.forward.as_deref())?;
+    let hops = resolve_hops(&args.hops)?;
 
     let subdomain = args.subdomain.clone().unwrap_or_default();
     let share_domain = args.domain.clone().unwrap_or_default();
@@ -91,6 +100,7 @@ pub async fn run(args: &super::ShareArgs) -> Result<()> {
         password: password.clone(),
         ttl: args.ttl,
         on_request: Some(on_request),
+        hops: hops.clone(),
     });
 
     let url = match client.connect().await {
@@ -156,7 +166,7 @@ pub async fn run(args: &super::ShareArgs) -> Result<()> {
         // Emit the `connected` event carrying the public URL (the automation value).
         println!(
             "{}",
-            share_connected_json(&url, &domain_url, &local_host, port, &password)
+            share_connected_json(&url, &domain_url, &local_host, port, &password, &hops)
         );
     } else {
         let arrow = term::dim("→");
@@ -174,6 +184,9 @@ pub async fn run(args: &super::ShareArgs) -> Result<()> {
                 term::check_mark(),
                 term::green(&domain_url)
             );
+        }
+        if !hops.is_empty() {
+            println!("Via: {}", term::dim(format_hop_chain(&hops)));
         }
         if !password.is_empty() {
             println!("Password: {password}");
@@ -214,6 +227,7 @@ fn share_connected_json(
     local_host: &str,
     port: u16,
     password: &str,
+    hops: &[HopSpec],
 ) -> serde_json::Value {
     let mut v = serde_json::json!({
         "event": "connected",
@@ -227,7 +241,23 @@ fn share_connected_json(
     if !password.is_empty() {
         v["password"] = serde_json::json!(password);
     }
+    if !hops.is_empty() {
+        // Emit the proxy chain with credentials redacted (scheme://host:port).
+        let chain: Vec<String> = hops.iter().map(redact_hop).collect();
+        v["hops"] = serde_json::json!(chain);
+    }
     v
+}
+
+/// Render a single hop as `scheme://host:port`, omitting any credentials so they
+/// never leak into logs or `--json` output.
+fn redact_hop(h: &HopSpec) -> String {
+    format!("{}://{}", h.scheme.as_str(), h.authority())
+}
+
+/// Render the whole proxy chain for the human "Via:" line, credentials redacted.
+fn format_hop_chain(hops: &[HopSpec]) -> String {
+    hops.iter().map(redact_hop).collect::<Vec<_>>().join(" → ")
 }
 
 #[cfg(test)]
@@ -239,7 +269,7 @@ mod tests {
     // and password are present only when set.
     #[test]
     fn share_connected_json_shape() {
-        let bare = share_connected_json("https://abc.lane.show", "", "localhost", 3000, "");
+        let bare = share_connected_json("https://abc.lane.show", "", "localhost", 3000, "", &[]);
         assert_eq!(bare["event"], "connected");
         assert_eq!(bare["url"], "https://abc.lane.show");
         assert_eq!(bare["port"], 3000);
@@ -252,6 +282,7 @@ mod tests {
             bare.get("password").is_none(),
             "password omitted when empty"
         );
+        assert!(bare.get("hops").is_none(), "hops omitted when empty");
 
         let full = share_connected_json(
             "https://abc.lane.show",
@@ -259,14 +290,68 @@ mod tests {
             "localhost",
             8080,
             "secret",
+            &[],
         );
         assert_eq!(full["domain_url"], "https://myapp.com");
         assert_eq!(full["password"], "secret");
 
         // A reverse-tunnel forward to a non-default upstream is reflected in `local`.
-        let fwd = share_connected_json("https://abc.lane.show", "", "127.0.0.1", 9000, "");
+        let fwd = share_connected_json("https://abc.lane.show", "", "127.0.0.1", 9000, "", &[]);
         assert_eq!(fwd["local"], "127.0.0.1:9000");
         assert_eq!(fwd["port"], 9000);
+    }
+
+    // The `connected` event lists the proxy chain with credentials redacted.
+    #[test]
+    fn share_connected_json_includes_redacted_hops() {
+        let hops = resolve_hops(&[
+            "socks5://alice:s3cret@proxy.corp:1080".to_string(),
+            "http://gw.corp:8080".to_string(),
+        ])
+        .unwrap();
+        let v = share_connected_json("https://abc.lane.show", "", "localhost", 3000, "", &hops);
+        let chain = v["hops"].as_array().expect("hops is an array");
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0], "socks5://proxy.corp:1080");
+        assert_eq!(chain[1], "http://gw.corp:8080");
+        // Credentials never appear in the serialized output.
+        assert!(!v.to_string().contains("s3cret"), "{v}");
+        assert!(!v.to_string().contains("alice"), "{v}");
+    }
+
+    #[test]
+    fn resolve_hops_parses_chain_in_order() {
+        let hops = resolve_hops(&[
+            "proxy.corp:1080".to_string(),
+            "http://gw.corp:8080".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(hops.len(), 2);
+        assert_eq!(hops[0].host, "proxy.corp");
+        assert_eq!(hops[1].host, "gw.corp");
+    }
+
+    #[test]
+    fn resolve_hops_empty_is_direct() {
+        assert!(resolve_hops(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn resolve_hops_propagates_parse_error() {
+        let err = resolve_hops(&["ftp://bad:1080".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("unknown proxy scheme"), "{err}");
+    }
+
+    #[test]
+    fn format_hop_chain_redacts_and_joins() {
+        let hops = resolve_hops(&[
+            "socks5://alice:s3cret@proxy.corp:1080".to_string(),
+            "http://gw.corp:8080".to_string(),
+        ])
+        .unwrap();
+        let line = format_hop_chain(&hops);
+        assert_eq!(line, "socks5://proxy.corp:1080 → http://gw.corp:8080");
+        assert!(!line.contains("s3cret"));
     }
 
     #[test]

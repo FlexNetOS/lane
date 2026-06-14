@@ -21,7 +21,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -29,11 +29,15 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async_with_config, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{
+    client_async_tls_with_config, connect_async_with_config, MaybeTlsStream, WebSocketStream,
+};
 
 use crate::httperr;
 use crate::log;
 use crate::protocol as proto;
+use crate::tunnel::dialer;
+use crate::tunnel::hops::HopSpec;
 
 /// 10 MiB read limit, mirroring Go's `conn.SetReadLimit(10 << 20)`.
 const MAX_MESSAGE_SIZE: usize = 10 << 20;
@@ -72,6 +76,9 @@ pub struct ClientOptions {
     pub password: String,
     pub ttl: Option<Duration>,
     pub on_request: Option<OnRequest>,
+    /// Ordered multi-hop proxy chain to route the dial through before the `wss`
+    /// upgrade. Empty ⇒ direct dial (the default). See [`super::hops`].
+    pub hops: Vec<HopSpec>,
 }
 
 /// Shared, immutable-after-connect dial configuration used by the read loop's
@@ -82,6 +89,8 @@ struct DialConfig {
     domain: String,
     password: String,
     ttl: Option<Duration>,
+    /// Multi-hop proxy chain to dial through (empty ⇒ direct).
+    hops: Vec<HopSpec>,
     /// The subdomain to (re)register with. Updated to the server-assigned value
     /// after the first successful registration, mirroring Go's
     /// `c.opts.Subdomain = resp.Subdomain`.
@@ -110,6 +119,7 @@ impl Client {
             domain: opts.domain.clone(),
             password: opts.password.clone(),
             ttl: opts.ttl,
+            hops: opts.hops.clone(),
             subdomain: Mutex::new(opts.subdomain.clone()),
             domain_url: Mutex::new(String::new()),
         });
@@ -183,11 +193,26 @@ async fn dial(cfg: &DialConfig) -> Result<(WsStream, String)> {
         ..Default::default()
     };
 
-    let (mut stream, _resp) =
+    let mut stream = if cfg.hops.is_empty() {
+        // Direct dial (default): tungstenite resolves and connects itself.
         match connect_async_with_config(&cfg.server_url, Some(ws_config), false).await {
-            Ok(ok) => ok,
+            Ok((s, _resp)) => s,
             Err(e) => return Err(httperr::wrap("dialing tunnel server", e)),
-        };
+        }
+    } else {
+        // Multi-hop dial: open a raw TCP byte-tunnel through the proxy chain to
+        // the tunnel server's host:port, then run the `wss` TLS + WebSocket
+        // upgrade over it. The wire protocol above is unchanged.
+        let authority = ws_authority(&cfg.server_url)
+            .context("parsing tunnel server URL for multi-hop dial")?;
+        let tcp = dialer::dial_through_hops(&cfg.hops, &authority)
+            .await
+            .context("dialing tunnel server through proxy chain")?;
+        match client_async_tls_with_config(&cfg.server_url, tcp, Some(ws_config), None).await {
+            Ok((s, _resp)) => s,
+            Err(e) => return Err(httperr::wrap("dialing tunnel server", e)),
+        }
+    };
 
     let mut reg = proto::RegistrationRequest {
         token: cfg.token.clone(),
@@ -583,6 +608,43 @@ fn error_response(port: u16, err: &str) -> (u16, String, Vec<(String, String)>, 
     (502, "Bad Gateway".to_string(), headers, body_bytes)
 }
 
+/// Extract the `host:port` authority from a `ws(s)://host[:port]/path` tunnel
+/// server URL, defaulting the port from the scheme (`wss`/`https` ⇒ 443,
+/// `ws`/`http` ⇒ 80). Used as the final CONNECT target of a multi-hop chain.
+fn ws_authority(url: &str) -> Result<String> {
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or_else(|| anyhow!("tunnel server URL {url:?} is missing a scheme"))?;
+
+    // Strip path/query/fragment after the authority.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    // Strip any userinfo (`user@host`) — not used for tunnel server URLs.
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+
+    if host_port.is_empty() {
+        bail!("tunnel server URL {url:?} is missing a host");
+    }
+
+    // An explicit port is kept as-is; otherwise default from the scheme.
+    // IPv6 literals (`[::1]`) carry a port only after the closing bracket.
+    let has_explicit_port = if let Some(close) = host_port.rfind(']') {
+        host_port[close + 1..].starts_with(':')
+    } else {
+        host_port.contains(':')
+    };
+
+    if has_explicit_port {
+        Ok(host_port.to_string())
+    } else {
+        let default_port = match scheme.to_ascii_lowercase().as_str() {
+            "wss" | "https" => 443,
+            "ws" | "http" => 80,
+            other => bail!("unsupported tunnel server scheme {other:?}"),
+        };
+        Ok(format!("{host_port}:{default_port}"))
+    }
+}
+
 /// Format a [`Duration`] the way Go's `time.Duration.String()` does, since the
 /// registration `ttl` field and reconnect log lines use that representation
 /// (e.g. `30m0s`, `1h0m0s`, `1s`, `500ms`).
@@ -683,6 +745,49 @@ mod tests {
         );
         assert_eq!(format_go_duration(Duration::from_millis(500)), "500ms");
         assert_eq!(format_go_duration(Duration::from_millis(1500)), "1.5s");
+    }
+
+    #[test]
+    fn ws_authority_defaults_port_from_scheme() {
+        assert_eq!(
+            ws_authority("wss://tunnel.lane.show/tunnel").unwrap(),
+            "tunnel.lane.show:443"
+        );
+        assert_eq!(
+            ws_authority("ws://tunnel.lane.show/tunnel").unwrap(),
+            "tunnel.lane.show:80"
+        );
+        assert_eq!(
+            ws_authority("https://tunnel.lane.show").unwrap(),
+            "tunnel.lane.show:443"
+        );
+    }
+
+    #[test]
+    fn ws_authority_keeps_explicit_port() {
+        assert_eq!(
+            ws_authority("wss://localhost:9999/tunnel").unwrap(),
+            "localhost:9999"
+        );
+        assert_eq!(
+            ws_authority("ws://127.0.0.1:8080").unwrap(),
+            "127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn ws_authority_handles_ipv6_literals() {
+        assert_eq!(ws_authority("wss://[::1]/tunnel").unwrap(), "[::1]:443");
+        assert_eq!(
+            ws_authority("wss://[::1]:9999/tunnel").unwrap(),
+            "[::1]:9999"
+        );
+    }
+
+    #[test]
+    fn ws_authority_rejects_malformed_urls() {
+        assert!(ws_authority("tunnel.lane.show").is_err()); // no scheme
+        assert!(ws_authority("ftp://tunnel.lane.show").is_err()); // bad scheme
     }
 
     #[test]
