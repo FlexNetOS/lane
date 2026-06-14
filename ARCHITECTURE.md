@@ -690,14 +690,17 @@ pub async fn run_accept_loop(endpoint: &Endpoint, config: AcceptConfig) -> Resul
 // CONNECT side: dial trusted node → open_bi → send TargetRequest → read status → bridge local ⇄ stream
 pub async fn connect_and_bridge(endpoint:&Endpoint, peer:EndpointAddr, target:&TargetRequest, local:TcpStream) -> Result<()>;
 pub async fn serve_local_bridge(endpoint:Endpoint, peer:EndpointAddr, target:TargetRequest, listener:TcpListener) -> Result<()>;
-pub fn relay_mode_from_config(cfg:&Config) -> RelayMode;  // peer|relay → RelayMode::Default (NAT traversal + DERP fallback)
+pub fn relay_mode_from_config(cfg:&Config) -> RelayMode;  // driven by relay_servers: empty→Default (n0 public relays); ["disabled"]→Disabled; URLs→Custom(self-hosted DERP); all-invalid→Default (fail-safe). DISTINCT from node-role relay_mode.
 pub fn endpoint_addr_from_parts(node_id:EndpointId, direct:impl IntoIterator<Item=SocketAddr>) -> EndpointAddr;
 ```
 
 **Config keys** (in `src/config`, all `#[serde(default)]` → old `.lane.yaml` still parses; inert
 without the feature): `relay_trusted_nodes: Vec<String>` (deny-by-default NodeId allowlist),
 `relay_mode: Option<String>` (`peer`|`relay`; default `peer`; unknown ⇒ `peer`),
-`relay_servers: Vec<String>` (optional DERP fallback URLs). `Config::relay_effective_mode() -> String`.
+`relay_servers: Vec<String>` (DERP/relay-server URLs: empty ⇒ n0 public relays; `["disabled"]` ⇒
+relaying off / direct-only; one-or-more URLs ⇒ self-hosted DERP via `RelayMode::Custom`, invalid
+entries skipped, all-invalid falls back to Default — `relay_mode_from_config` wires this; availability
+not security, so it is fail-safe). `Config::relay_effective_mode() -> String` (the node ROLE, distinct).
 
 CLI: `src/cli/relay.rs` — `lane relay up` (start the governed node; `--json {node_id, listening,
 trusted_count}`), `lane relay connect <NodeId>/<host:port> [--local-port N]` (bridge a local port to a
@@ -714,6 +717,11 @@ Proofs: (1) two-node reachability — A opens a stream to B and bytes round-trip
 to a local echo; (2) governance-across-the-link — a target denied by B's webpolicy is refused (error
 frame, **no upstream connect**, logged) while an allowed target bridges, AND an **untrusted** node's
 connection is rejected (deny-by-default).
+
+**Cross-machine validation** (the hardware-dependent NAT-traversal case the hermetic tests cannot
+cover): see [`docs/relay-validation.md`](docs/relay-validation.md) — an operator runbook for proving
+real two-host relay (direct vs relayed path, governance refusal at the target, deny-by-default trust)
+and for pinning self-hosted DERP relays via `relay_servers`.
 
 ## src/setup  (⇐ internal/setup)
 

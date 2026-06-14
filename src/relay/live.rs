@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use iroh::endpoint::presets;
-use iroh::{Endpoint, EndpointAddr, RelayMode, SecretKey, TransportAddr};
+use iroh::{Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey, TransportAddr};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::webpolicy::{PolicyDecision, Scheme, WebPolicy};
@@ -304,17 +304,72 @@ pub async fn serve_local_bridge(
     }
 }
 
-/// Map lane's config to iroh's [`RelayMode`].
+/// Sentinel value in `relay_servers` that explicitly disables DERP/relaying:
+/// `relay_servers: ["disabled"]` ⇒ [`RelayMode::Disabled`] (direct-only). Any
+/// other non-empty list is treated as custom self-hosted relay URLs.
+pub const RELAY_SERVERS_DISABLED: &str = "disabled";
+
+/// Map lane's config to iroh's DERP [`RelayMode`] (the relay-server / NAT-traversal
+/// setting — **distinct** from lane's node-role `relay_mode` (`peer`|`relay`),
+/// which is handled separately by [`Config::relay_effective_mode`] and does not
+/// affect the DERP `RelayMode` chosen here).
 ///
-/// Both `peer` and `relay` modes use [`RelayMode::Default`] so the fleet gets
-/// iroh's built-in hole-punching + DERP relay fallback for NAT traversal (the
-/// whole point of the relay). The `relay` mode is reserved for the
-/// rendezvous/relay-node role (informed by ADR-0002 Option C); its
-/// always-on-relay behavior is layered on top of the same transport. Custom
-/// `relay_servers` are not yet wired into a `RelayMap` here — that is follow-on
-/// work; until then the default relays are used (documented, not a silent drop).
-pub fn relay_mode_from_config(_cfg: &crate::config::Config) -> RelayMode {
-    RelayMode::Default
+/// The choice is driven entirely by [`Config::relay_servers`]:
+/// - **empty** ⇒ [`RelayMode::Default`] — n0's public relays; iroh's
+///   hole-punching + DERP fallback work out of the box with no configuration.
+/// - **`["disabled"]`** ([`RELAY_SERVERS_DISABLED`]) ⇒ [`RelayMode::Disabled`] —
+///   direct-only, no relaying (advanced/direct-reachable deployments).
+/// - **non-empty URLs** ⇒ [`RelayMode::Custom`] pinning your own self-hosted DERP
+///   relays. Each entry is parsed as a [`RelayUrl`]; invalid entries are logged
+///   and skipped. If **every** entry is invalid the function **falls back to
+///   [`RelayMode::Default`]** with a warning — relay connectivity is an
+///   *availability* concern (NAT traversal), not a security boundary, so it is
+///   fail-safe here, not fail-closed. Security stays deny-by-default in the
+///   trusted-node allowlist and the webpolicy, which are unaffected by this.
+///
+/// To pin self-hosted relays, set `relay_servers` in `.lane.yaml`:
+/// ```yaml
+/// relay_servers:
+///   - https://derp.example.test
+/// ```
+pub fn relay_mode_from_config(cfg: &crate::config::Config) -> RelayMode {
+    if cfg.relay_servers.is_empty() {
+        return RelayMode::Default;
+    }
+
+    // Explicit opt-out: a single "disabled" sentinel turns relaying off entirely.
+    if cfg.relay_servers.len() == 1
+        && cfg.relay_servers[0]
+            .trim()
+            .eq_ignore_ascii_case(RELAY_SERVERS_DISABLED)
+    {
+        return RelayMode::Disabled;
+    }
+
+    let mut urls: Vec<RelayUrl> = Vec::with_capacity(cfg.relay_servers.len());
+    for entry in &cfg.relay_servers {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        match entry.parse::<RelayUrl>() {
+            Ok(url) => urls.push(url),
+            Err(e) => crate::log::error(&format!(
+                "relay: ignoring invalid relay_servers entry {entry:?}: {e}"
+            )),
+        }
+    }
+
+    if urls.is_empty() {
+        // Fail-safe (availability, not security): no usable custom relay ⇒ fall
+        // back to the public default relays rather than disabling NAT traversal.
+        crate::log::error(
+            "relay: all relay_servers entries were invalid — falling back to default relays",
+        );
+        return RelayMode::Default;
+    }
+
+    RelayMode::custom(urls)
 }
 
 /// Build an [`EndpointAddr`] for a NodeId plus optional direct socket addresses.
@@ -526,5 +581,78 @@ mod tests {
         node_a.close().await;
         node_b.close().await;
         accept.abort();
+    }
+
+    /// Build a `Config` with the given `relay_servers` list (all else default).
+    fn cfg_with_relays(servers: &[&str]) -> crate::config::Config {
+        crate::config::Config {
+            relay_servers: servers.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Empty `relay_servers` ⇒ public default relays. This is the no-config path:
+    /// NAT traversal works out of the box.
+    #[test]
+    fn relay_mode_empty_is_default() {
+        let cfg = cfg_with_relays(&[]);
+        assert!(matches!(relay_mode_from_config(&cfg), RelayMode::Default));
+    }
+
+    /// One valid URL ⇒ Custom relay map pinning exactly that self-hosted relay.
+    #[test]
+    fn relay_mode_one_url_is_custom() {
+        let cfg = cfg_with_relays(&["https://derp.example.test"]);
+        match relay_mode_from_config(&cfg) {
+            RelayMode::Custom(map) => assert_eq!(map.len(), 1, "exactly one relay pinned"),
+            other => panic!("expected Custom, got {other:?}"),
+        }
+    }
+
+    /// Multiple valid URLs ⇒ Custom relay map carrying all of them.
+    #[test]
+    fn relay_mode_multiple_urls_is_custom() {
+        let cfg = cfg_with_relays(&[
+            "https://derp1.example.test",
+            "https://derp2.example.test",
+            "https://derp3.example.test",
+        ]);
+        match relay_mode_from_config(&cfg) {
+            RelayMode::Custom(map) => assert_eq!(map.len(), 3, "all three relays pinned"),
+            other => panic!("expected Custom, got {other:?}"),
+        }
+    }
+
+    /// An invalid entry among valid ones is skipped (fail-safe); the valid relays
+    /// still form a Custom map.
+    #[test]
+    fn relay_mode_skips_invalid_among_valid() {
+        let cfg = cfg_with_relays(&[
+            "https://derp1.example.test",
+            "not a url",
+            "https://derp2.example.test",
+        ]);
+        match relay_mode_from_config(&cfg) {
+            RelayMode::Custom(map) => assert_eq!(map.len(), 2, "only the two valid relays survive"),
+            other => panic!("expected Custom, got {other:?}"),
+        }
+    }
+
+    /// ALL entries invalid ⇒ fail-safe fallback to Default (not Disabled): relay
+    /// connectivity is availability, not security.
+    #[test]
+    fn relay_mode_all_invalid_falls_back_to_default() {
+        let cfg = cfg_with_relays(&["not a url", "also bad", ""]);
+        assert!(matches!(relay_mode_from_config(&cfg), RelayMode::Default));
+    }
+
+    /// The explicit `["disabled"]` sentinel turns relaying off (direct-only).
+    #[test]
+    fn relay_mode_disabled_sentinel() {
+        let cfg = cfg_with_relays(&["disabled"]);
+        assert!(matches!(relay_mode_from_config(&cfg), RelayMode::Disabled));
+        // case-insensitive
+        let cfg = cfg_with_relays(&["DISABLED"]);
+        assert!(matches!(relay_mode_from_config(&cfg), RelayMode::Disabled));
     }
 }
