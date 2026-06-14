@@ -81,6 +81,27 @@ pub struct Config {
     /// (`{80, 443}`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub web_allow_ports: Vec<u16>,
+    /// Path **deny** rules for `lane web` (prefix match). Only enforced when a
+    /// full URL with a path is seen — plain-HTTP forward requests and TLS-inspect
+    /// ([`web_tls_inspect`](Config::web_tls_inspect)). Reuses the
+    /// [`crate::webpolicy`] path-rule shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub web_deny_paths: Vec<String>,
+    /// Path **allow** rules for `lane web` (prefix match). When non-empty, a
+    /// full-URL path must match one or the request is denied. Empty ⇒ all paths
+    /// allowed (back-compat). Only enforced when a full URL is seen.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub web_allow_paths: Vec<String>,
+    /// Opt-in TLS-inspection (MITM) for `lane web`'s governed proxy. Default
+    /// **false** ⇒ HTTPS CONNECTs are opaque tunnels (host/port governance only).
+    /// When `true`, lane terminates obscura's TLS with a per-host leaf signed by
+    /// lane's CA (which obscura trusts via `--ca`), governs each request at the
+    /// full-URL/path level (so [`web_deny_paths`](Config::web_deny_paths) /
+    /// [`web_allow_paths`](Config::web_allow_paths) bite on HTTPS too), logs the
+    /// full URL, then re-originates real, validated TLS to the true upstream.
+    /// This intercepts only obscura's OWN governed egress (which lane controls).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub web_tls_inspect: bool,
 
     // --- cross-machine relay (ADR-0002) ----------------------------------------
     // All `#[serde(default)]` so a `.lane.yaml` written before the relay existed
@@ -276,7 +297,24 @@ impl Config {
         if !self.web_allow_ports.is_empty() {
             policy = policy.allow_ports(self.web_allow_ports.iter().copied());
         }
+        for path in &self.web_deny_paths {
+            policy = policy.deny_path(path.clone());
+        }
+        for path in &self.web_allow_paths {
+            policy = policy.allow_path(path.clone());
+        }
         policy
+    }
+
+    /// Whether TLS-inspection (MITM) is enabled for `lane web`'s governed proxy.
+    /// The `LANE_WEB_TLS_INSPECT` env var overlays the config flag (any of
+    /// `1`/`true`/`yes`/`on` forces it on; the config value is used otherwise).
+    /// Default is **false** — opaque CONNECT tunnels (no interception).
+    pub fn web_tls_inspect(&self) -> bool {
+        self.web_tls_inspect
+            || std::env::var("LANE_WEB_TLS_INSPECT")
+                .map(|v| env_truthy(&v))
+                .unwrap_or(false)
     }
 
     /// The effective relay mode: the configured value normalized, or the default

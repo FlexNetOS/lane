@@ -9,26 +9,37 @@
 //! [`crate::webpolicy`] gate and recorded in lane's access log. obscura cannot
 //! reach the network except through this listener; lane is the egress governor.
 //!
-//! # Governance model (connection-level, no TLS MITM)
+//! # Governance model (connection-level by default; optional TLS-inspect MITM)
 //!
 //! A forward proxy sees two request shapes, and lane governs both at the
-//! granularity webpolicy operates on (host + port + scheme):
+//! granularity webpolicy operates on:
 //!
 //! - **`CONNECT host:port`** (the HTTPS tunnel obscura opens for every `https://`
-//!   origin): lane runs [`WebPolicy::check_addr`] on the host/port. ALLOW → reply
-//!   `200 Connection Established` and [`tokio::io::copy_bidirectional`] the opaque
-//!   TLS bytes between obscura and the origin. DENY → `403 Forbidden`, close,
-//!   **never** connect upstream. lane does **not** terminate/inspect the TLS
-//!   (no MITM): webpolicy is host/port-level, so CONNECT-level governance matches
-//!   its granularity exactly. (The `--ca` capability the spawn plan emits is
-//!   forward-compat for a future path-level MITM mode; this proxy does not build
-//!   it.)
+//!   origin): lane runs [`WebPolicy::check_addr`] on the host/port **first** in
+//!   both modes. DENY → `403 Forbidden`, close, **never** connect upstream. On
+//!   ALLOW, the behavior depends on the **opt-in** `tls_inspect` toggle (config
+//!   `web_tls_inspect`, default **off**):
+//!   - **off (default):** reply `200 Connection Established` and
+//!     [`tokio::io::copy_bidirectional`] the **opaque** TLS bytes between obscura
+//!     and the origin. lane does not terminate/inspect the TLS; governance is
+//!     host/port-level, matching webpolicy's grain for the tunnel.
+//!   - **on (TLS-inspect / MITM, [`handle_connect_mitm`]):** lane terminates
+//!     obscura's TLS with a per-host leaf signed by **lane's own CA** (which
+//!     obscura already trusts via the `--ca` the spawn plan emits), decrypts the
+//!     stream, and governs **each** request at the full-URL/path level via
+//!     [`WebPolicy::check`] — so `deny_paths` / `allow_paths` bite on HTTPS too —
+//!     then **re-originates real, validated TLS** to the true upstream (the
+//!     lane↔origin hop verifies the origin's real certificate normally; MITM is
+//!     only on the obscura↔lane hop, which lane controls). This intercepts only
+//!     obscura's OWN governed egress, never third-party traffic.
 //! - **absolute-form plain HTTP** (`GET http://host/path HTTP/1.1`, as a forward
 //!   proxy receives plain-HTTP requests): lane runs [`WebPolicy::check`] on the
-//!   absolute URL. ALLOW → forward to the origin and stream the response back.
-//!   DENY → `403 Forbidden`.
+//!   absolute URL (path rules included). ALLOW → forward to the origin and stream
+//!   the response back. DENY → `403 Forbidden`.
 //!
-//! Anything malformed or unrecognized fails **closed** (`403`).
+//! Anything malformed or unrecognized fails **closed** (`403`). In TLS-inspect
+//! mode every TLS / parse / leaf / forward error logs and closes — it **never**
+//! falls back to an ungoverned opaque tunnel.
 //!
 //! # Deny-by-default + observability
 //!
@@ -71,11 +82,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use rustls::server::{ClientHello, ResolvesServerCert};
+use rustls::sign::CertifiedKey;
+use rustls::ServerConfig;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use tokio_rustls::TlsAcceptor;
 
 use crate::webpolicy::{Scheme, WebPolicy};
 
@@ -124,19 +139,27 @@ struct Upstream {
 }
 
 /// Per-connection state shared with both handlers: the policy gate, the optional
-/// upstream to chain through, and the concurrency permit pool.
+/// upstream to chain through, the concurrency permit pool, and the TLS-inspect
+/// (MITM) toggle.
 #[derive(Debug)]
 struct ProxyState {
     policy: WebPolicy,
     upstream: Option<Upstream>,
     semaphore: Semaphore,
+    /// When `true`, HTTPS CONNECTs are TLS-terminated and governed at the
+    /// request/path level (MITM); when `false` (default), CONNECTs are opaque
+    /// tunnels governed only at host/port. See [`handle_connect_mitm`].
+    tls_inspect: bool,
 }
 
 impl GovernedProxy {
     /// Start a governed forward proxy on an ephemeral loopback port, governing
     /// egress with `policy` and connecting to allowed origins **directly**.
+    ///
+    /// TLS-inspection is **off** (opaque CONNECT tunnels). Use
+    /// [`start_with_options`](GovernedProxy::start_with_options) to opt into MITM.
     pub async fn start(policy: WebPolicy) -> Result<GovernedProxy> {
-        Self::start_with_upstream(policy, None).await
+        Self::start_with_options(policy, None, false).await
     }
 
     /// Start a governed forward proxy, optionally chaining allowed traffic
@@ -155,6 +178,28 @@ impl GovernedProxy {
         policy: WebPolicy,
         upstream: Option<String>,
     ) -> Result<GovernedProxy> {
+        Self::start_with_options(policy, upstream, false).await
+    }
+
+    /// Start a governed forward proxy with the full set of options: the policy,
+    /// the optional `upstream` proxy to chain *allowed* traffic through (after
+    /// governance), and `tls_inspect`.
+    ///
+    /// When `tls_inspect` is `true`, ALLOWED HTTPS `CONNECT`s are **TLS-terminated
+    /// and inspected** (MITM): lane mints a per-host leaf signed by its own CA
+    /// (which obscura trusts via `--ca`), decrypts the stream, and governs **each**
+    /// request at the full-URL/path level — so [`WebPolicy::check`]'s path rules
+    /// bite on HTTPS too — re-originating real, validated TLS to the true upstream.
+    /// The host/port `check_addr` gate still runs **first** (deny → 403, no
+    /// connect). When `tls_inspect` is `false` (default), `CONNECT`s are opaque
+    /// tunnels governed only at host/port. See [`handle_connect_mitm`].
+    ///
+    /// A malformed `upstream` URL is rejected here at `start` (fail closed).
+    pub async fn start_with_options(
+        policy: WebPolicy,
+        upstream: Option<String>,
+        tls_inspect: bool,
+    ) -> Result<GovernedProxy> {
         let upstream = match upstream {
             Some(up) => Some(parse_upstream(&up)?),
             None => None,
@@ -171,6 +216,7 @@ impl GovernedProxy {
             policy,
             upstream,
             semaphore: Semaphore::new(MAX_CONCURRENT_CONNS),
+            tls_inspect,
         });
         let accept_task = tokio::spawn(async move {
             loop {
@@ -274,6 +320,15 @@ async fn handle_conn(mut client: TcpStream, state: &ProxyState) -> Result<()> {
 /// is enforced **before** each read, so an oversized head is never buffered
 /// unboundedly.
 async fn read_head(client: &mut TcpStream) -> std::result::Result<(Vec<u8>, usize), &'static str> {
+    read_head_generic(client).await
+}
+
+/// [`read_head`] over any [`AsyncRead`] (used for the decrypted MITM TLS stream
+/// as well as plain TCP). Same byte cap + fail-closed semantics.
+async fn read_head_generic<R>(client: &mut R) -> std::result::Result<(Vec<u8>, usize), &'static str>
+where
+    R: AsyncRead + Unpin,
+{
     let mut head = Vec::with_capacity(1024);
     let mut buf = [0u8; 4096];
     loop {
@@ -309,10 +364,20 @@ async fn handle_connect(
     port: u16,
 ) -> Result<()> {
     // CONNECT is always for TLS origins (https): check at https granularity.
+    // This host/port gate runs FIRST in BOTH modes (tunnel and MITM): a denied
+    // target is rejected before any connect / TLS handshake.
     let decision = state.policy.check_addr(host, port, Scheme::Https);
     if let crate::webpolicy::PolicyDecision::Deny(reason) = decision {
         crate::log::info(&format!("web-egress DENY CONNECT {host}:{port} ({reason})"));
         return deny(client, &reason.to_string()).await;
+    }
+
+    // ALLOW at host/port. In TLS-inspect (MITM) mode, terminate the client's TLS
+    // and govern each decrypted request at the full-URL/path level instead of
+    // splicing opaque bytes. Fails closed on any error (never an ungoverned
+    // tunnel fallback).
+    if state.tls_inspect {
+        return handle_connect_mitm(client, state, host, port).await;
     }
 
     // ALLOW: open the origin. Either directly, or — when chaining — via a nested
@@ -380,6 +445,288 @@ async fn handle_connect(
     // Opaque byte splice — no TLS termination (no MITM); webpolicy is
     // host/port-level so CONNECT-level governance already matches its grain.
     let _ = tokio::io::copy_bidirectional(client, &mut upstream).await;
+    Ok(())
+}
+
+/// A fixed-cert rustls resolver: always presents the one per-host
+/// [`CertifiedKey`] lane minted for the MITM'd CONNECT, regardless of SNI. (We
+/// already know the host from the CONNECT authority, so SNI-based selection is
+/// unnecessary and a single key is correct.)
+#[derive(Debug)]
+struct FixedCert(Arc<CertifiedKey>);
+
+impl ResolvesServerCert for FixedCert {
+    fn resolve(&self, _hello: ClientHello) -> Option<Arc<CertifiedKey>> {
+        Some(Arc::clone(&self.0))
+    }
+}
+
+/// Govern + service an ALLOWED `CONNECT host:port` in **TLS-inspect (MITM)**
+/// mode: the host/port gate has already passed (run in [`handle_connect`]).
+///
+/// 1. Ack `200 Connection Established` so the client begins its TLS handshake.
+/// 2. Mint/load a per-host leaf signed by lane's CA (obscura trusts it via
+///    `--ca`), build a rustls [`ServerConfig`] from it, and accept the client's
+///    TLS (lane is now the TLS server the client talks to).
+/// 3. On the decrypted stream, loop over HTTP/1.1 requests (keep-alive): for each
+///    reconstruct the absolute URL `https://{host}{path}`, run the path-aware
+///    [`WebPolicy::check`] deny-by-default, LOG the full URL, and either reject
+///    with a `403` over the TLS stream (DENY) or forward to the real origin via
+///    the in-tree reqwest client — re-originating **real, validated** TLS to the
+///    true upstream (honoring upstream chaining when configured) — and relay the
+///    response back over the client TLS stream (ALLOW).
+///
+/// Fails **closed**: any TLS / parse / leaf / forward error logs and closes — it
+/// **never** falls back to an ungoverned opaque tunnel.
+async fn handle_connect_mitm(
+    client: &mut TcpStream,
+    state: &ProxyState,
+    host: &str,
+    port: u16,
+) -> Result<()> {
+    // Ack so the client starts its TLS handshake against us (we are the server).
+    client
+        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        .await
+        .context("acking CONNECT (mitm)")?;
+
+    // Mint/load the per-host leaf signed by lane's CA, then build the acceptor.
+    let acceptor = match build_mitm_acceptor(host) {
+        Ok(a) => a,
+        Err(e) => {
+            crate::log::info(&format!(
+                "web-egress DENY CONNECT {host}:{port} — mitm leaf/tls setup failed: {e}"
+            ));
+            // The client is mid-handshake; closing fails it closed (no tunnel).
+            return Ok(());
+        }
+    };
+
+    // Terminate the client's TLS. On failure (e.g. the client does not trust
+    // lane's CA) we close — never a fallback tunnel.
+    let mut tls = match acceptor.accept(&mut *client).await {
+        Ok(s) => s,
+        Err(e) => {
+            crate::log::info(&format!(
+                "web-egress DENY CONNECT {host}:{port} — client TLS handshake failed: {e}"
+            ));
+            return Ok(());
+        }
+    };
+
+    // Serve decrypted requests until the client closes or asks to (keep-alive).
+    loop {
+        let (head, head_end) = match timeout(HEAD_READ_TIMEOUT, read_head_generic(&mut tls)).await {
+            Ok(Ok(parsed)) => parsed,
+            // Clean EOF / client closed / timeout: end the connection.
+            Ok(Err(_)) | Err(_) => return Ok(()),
+        };
+
+        let request_line = match first_line(&head) {
+            Some(line) => line,
+            None => {
+                let _ = write_tls_status(&mut tls, 400, "Bad Request", "malformed request").await;
+                return Ok(());
+            }
+        };
+
+        // Decrypted requests are origin-form (`GET /path HTTP/1.1`): reconstruct
+        // the absolute URL from the CONNECT host + the request-line path.
+        let (method, path) = match parse_origin_request_line(&request_line) {
+            Some(mp) => mp,
+            None => {
+                let _ = write_tls_status(&mut tls, 400, "Bad Request", "malformed request").await;
+                return Ok(());
+            }
+        };
+        let url = build_https_url(host, port, &path);
+
+        let keep_alive = request_keeps_alive(&head, head_end);
+
+        // Path-aware deny-by-default on the full URL.
+        if let crate::webpolicy::PolicyDecision::Deny(reason) = state.policy.check(&url) {
+            crate::log::info(&format!("web-egress DENY {method} {url} ({reason})"));
+            if write_tls_status(&mut tls, 403, "Forbidden", &reason.to_string())
+                .await
+                .is_err()
+            {
+                return Ok(());
+            }
+            if keep_alive {
+                continue;
+            }
+            return Ok(());
+        }
+
+        crate::log::info(&format!("web-egress ALLOW {method} {url}"));
+
+        // Forward to the real origin over re-originated, validated TLS (reqwest
+        // verifies the true upstream's certificate normally — MITM is only on the
+        // obscura↔lane hop, never on lane↔origin).
+        if forward_mitm_request(&mut tls, state, &method, &url, &head, head_end, keep_alive)
+            .await
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        if !keep_alive {
+            return Ok(());
+        }
+    }
+}
+
+/// Build a [`TlsAcceptor`] that presents a lane-CA-signed leaf for `host`. Mints
+/// the leaf if absent/stale, loads it into a [`CertifiedKey`], and wraps it in a
+/// single-cert [`ServerConfig`] (ALPN `http/1.1` — the MITM bridge speaks
+/// HTTP/1.1). Any cert/leaf error propagates (caller fails closed).
+fn build_mitm_acceptor(host: &str) -> Result<TlsAcceptor> {
+    crate::install_crypto_provider();
+    crate::cert::ensure_leaf_cert(host).with_context(|| format!("minting mitm leaf for {host}"))?;
+    let certified = crate::cert::load_leaf_tls(host)
+        .with_context(|| format!("loading mitm leaf for {host}"))?;
+    let resolver = Arc::new(FixedCert(Arc::new(certified)));
+    let mut cfg = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(resolver);
+    // The decrypted bridge serves HTTP/1.1 only.
+    cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(TlsAcceptor::from(Arc::new(cfg)))
+}
+
+/// Reconstruct the absolute `https://host[:port]/path` URL for a decrypted
+/// request. The default `:443` is omitted so it matches the canonical form
+/// webpolicy parses; a non-default port is preserved.
+fn build_https_url(host: &str, port: u16, path: &str) -> String {
+    let p = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    if port == 443 {
+        format!("https://{host}{p}")
+    } else {
+        format!("https://{host}:{port}{p}")
+    }
+}
+
+/// Parse a decrypted origin-form request line (`METHOD /path HTTP/1.1`) into
+/// `(method, path)`. Returns `None` if malformed (caller rejects).
+fn parse_origin_request_line(line: &str) -> Option<(String, String)> {
+    let mut parts = line.split_whitespace();
+    let method = parts.next()?.to_string();
+    let target = parts.next()?.to_string();
+    let _version = parts.next()?;
+    Some((method, target))
+}
+
+/// `true` if the request head indicates keep-alive (HTTP/1.1 default-on unless
+/// `Connection: close`; HTTP/1.0 default-off unless `Connection: keep-alive`).
+fn request_keeps_alive(head: &[u8], head_end: usize) -> bool {
+    let is_http10 = first_line(head)
+        .map(|l| l.contains("HTTP/1.0"))
+        .unwrap_or(false);
+    let mut close = is_http10;
+    let mut keep = !is_http10;
+    for (name, value) in parse_headers(head, head_end) {
+        if name.eq_ignore_ascii_case("connection") {
+            if value.eq_ignore_ascii_case("close") {
+                close = true;
+                keep = false;
+            } else if value.eq_ignore_ascii_case("keep-alive") {
+                keep = true;
+                close = false;
+            }
+        }
+    }
+    keep && !close
+}
+
+/// Forward an ALLOWED decrypted request to the real origin via the in-tree
+/// reqwest client (re-originating real, validated TLS; honoring the upstream
+/// proxy chain when configured) and relay the response back over the client TLS
+/// stream. Returns `Err` only on a fatal write-to-client error (caller closes);
+/// origin/transport errors are surfaced to the client as a `502`.
+#[allow(clippy::too_many_arguments)]
+async fn forward_mitm_request<S>(
+    tls: &mut S,
+    state: &ProxyState,
+    method: &str,
+    url: &str,
+    head: &[u8],
+    head_end: usize,
+    keep_alive: bool,
+) -> Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
+    let reqwest_method = match reqwest::Method::from_bytes(method.as_bytes()) {
+        Ok(m) => m,
+        Err(_) => {
+            return write_tls_status(tls, 405, "Method Not Allowed", "unsupported method").await;
+        }
+    };
+
+    let headers = parse_headers(head, head_end);
+    let body = head.get(head_end..).unwrap_or(&[]).to_vec();
+
+    let mut client_builder = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT);
+    if let Some(up) = &state.upstream {
+        match reqwest::Proxy::all(&up.url) {
+            Ok(proxy) => client_builder = client_builder.proxy(proxy),
+            Err(_) => {
+                return write_tls_status(tls, 502, "Bad Gateway", "upstream proxy misconfigured")
+                    .await;
+            }
+        }
+    }
+
+    let http = match client_builder.build() {
+        Ok(c) => c,
+        Err(_) => {
+            return write_tls_status(tls, 502, "Bad Gateway", "client build failed").await;
+        }
+    };
+
+    let mut builder = http.request(reqwest_method, url);
+    for (name, value) in &headers {
+        if is_hop_by_hop(name) {
+            continue;
+        }
+        builder = builder.header(name, value);
+    }
+    if !body.is_empty() {
+        builder = builder.body(body);
+    }
+
+    let resp = match builder.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            crate::log::info(&format!(
+                "web-egress ALLOW {method} {url} — upstream error: {e}"
+            ));
+            return write_tls_status(tls, 502, "Bad Gateway", "upstream error").await;
+        }
+    };
+
+    write_http_response_generic(tls, resp, keep_alive).await
+}
+
+/// Write a minimal `code reason` HTTP/1.1 response with a short body over a
+/// generic (TLS) stream. `keep-alive`-safe: sends an explicit `content-length`
+/// and `connection: keep-alive` so the client may pipeline another request.
+async fn write_tls_status<S>(tls: &mut S, code: u16, reason: &str, detail: &str) -> Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
+    let body = format!("lane governed proxy: {detail}\n");
+    let resp = format!(
+        "HTTP/1.1 {code} {reason}\r\ncontent-length: {}\r\nconnection: keep-alive\r\n\r\n{body}",
+        body.len()
+    );
+    tls.write_all(resp.as_bytes())
+        .await
+        .context("writing status over tls")?;
     Ok(())
 }
 
@@ -520,6 +867,21 @@ async fn handle_http(
 /// Serialize a reqwest response back to the proxy client (status line, headers,
 /// body).
 async fn write_http_response(client: &mut TcpStream, resp: reqwest::Response) -> Result<()> {
+    write_http_response_generic(client, resp, false).await
+}
+
+/// [`write_http_response`] over any [`AsyncWrite`] (used for the decrypted MITM
+/// TLS stream as well as plain TCP). Same normalized framing; `keep_alive`
+/// selects the `connection` header (the MITM bridge keeps the connection open to
+/// pipeline; the plain-HTTP path closes after one response).
+async fn write_http_response_generic<S>(
+    client: &mut S,
+    resp: reqwest::Response,
+    keep_alive: bool,
+) -> Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
     let status = resp.status();
     let reason = status.canonical_reason().unwrap_or("");
     let mut out = format!("HTTP/1.1 {} {}\r\n", status.as_u16(), reason).into_bytes();
@@ -552,7 +914,11 @@ async fn write_http_response(client: &mut TcpStream, resp: reqwest::Response) ->
         out.extend_from_slice(b"\r\n");
     }
     out.extend_from_slice(format!("content-length: {}\r\n", body.len()).as_bytes());
-    out.extend_from_slice(b"connection: close\r\n\r\n");
+    if keep_alive {
+        out.extend_from_slice(b"connection: keep-alive\r\n\r\n");
+    } else {
+        out.extend_from_slice(b"connection: close\r\n\r\n");
+    }
     out.extend_from_slice(&body);
 
     client
@@ -1245,5 +1611,207 @@ mod tests {
     #[test]
     fn split_authority_ipv6() {
         assert_eq!(split_authority("[::1]:443"), Some(("::1".to_string(), 443)));
+    }
+
+    // --- TLS-inspect (MITM) -------------------------------------------------
+
+    #[test]
+    fn build_https_url_omits_default_port() {
+        assert_eq!(
+            build_https_url("example.com", 443, "/x"),
+            "https://example.com/x"
+        );
+        assert_eq!(
+            build_https_url("example.com", 8443, "/x"),
+            "https://example.com:8443/x"
+        );
+        // A path missing its leading slash is normalized.
+        assert_eq!(build_https_url("h", 443, "x"), "https://h/x");
+    }
+
+    #[test]
+    fn parse_origin_request_line_extracts_method_and_path() {
+        assert_eq!(
+            parse_origin_request_line("GET /ok HTTP/1.1"),
+            Some(("GET".to_string(), "/ok".to_string()))
+        );
+        assert!(parse_origin_request_line("GET").is_none());
+    }
+
+    #[test]
+    fn request_keeps_alive_http11_default_on_unless_close() {
+        let h11 = b"GET / HTTP/1.1\r\nHost: x\r\n\r\n";
+        let end11 = find_head_end(h11).unwrap();
+        assert!(request_keeps_alive(h11, end11));
+
+        let h11_close = b"GET / HTTP/1.1\r\nConnection: close\r\n\r\n";
+        let end_close = find_head_end(h11_close).unwrap();
+        assert!(!request_keeps_alive(h11_close, end_close));
+
+        // HTTP/1.0 defaults to close unless keep-alive is asked for.
+        let h10 = b"GET / HTTP/1.0\r\n\r\n";
+        let end10 = find_head_end(h10).unwrap();
+        assert!(!request_keeps_alive(h10, end10));
+        let h10_keep = b"GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n";
+        let end10k = find_head_end(h10_keep).unwrap();
+        assert!(request_keeps_alive(h10_keep, end10k));
+    }
+
+    /// Point `HOME` at a fresh temp dir so cert paths resolve under it, then mint
+    /// a lane CA. Returns the guard (keep it alive for the test's duration).
+    fn home_with_ca() -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        std::env::set_var("HOME", dir.path());
+        crate::cert::generate_ca(crate::cert::KeyType::Rsa2048).expect("generate_ca");
+        dir
+    }
+
+    /// A rustls client config that trusts ONLY lane's CA (so a CONNECT-then-TLS
+    /// client accepts the leaf the MITM proxy mints — mirroring obscura, which
+    /// trusts lane's CA via `--ca`).
+    fn client_tls_trusting_lane_ca() -> tokio_rustls::TlsConnector {
+        crate::install_crypto_provider();
+        let ca_pem = std::fs::read(crate::cert::ca_cert_path()).expect("read CA pem");
+        let mut roots = rustls::RootCertStore::empty();
+        let mut rd = std::io::BufReader::new(&ca_pem[..]);
+        for cert in rustls_pemfile::certs(&mut rd) {
+            roots.add(cert.expect("ca cert")).expect("add ca");
+        }
+        let cfg = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        tokio_rustls::TlsConnector::from(Arc::new(cfg))
+    }
+
+    /// Drive a full CONNECT → client-TLS handshake against the MITM proxy and
+    /// send one origin-form request over the decrypted stream; return the raw
+    /// status line of the response the proxy writes back.
+    async fn mitm_request_status(
+        proxy_addr: SocketAddr,
+        host: &str,
+        port: u16,
+        path: &str,
+    ) -> String {
+        use tokio_rustls::rustls::pki_types::ServerName;
+
+        let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+        client
+            .write_all(format!("CONNECT {host}:{port} HTTP/1.1\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        // Consume the 200 ack (status line + trailing CRLF).
+        let ack = read_status_line(&mut client).await;
+        assert!(ack.contains("200"), "expected CONNECT ack 200, got {ack:?}");
+        let mut crlf = [0u8; 2];
+        client.read_exact(&mut crlf).await.unwrap();
+
+        // Now upgrade to TLS (trusting lane's CA) — the proxy presents a minted
+        // lane-CA leaf for `host`, so this handshake succeeds.
+        let connector = client_tls_trusting_lane_ca();
+        let server_name = ServerName::try_from(host.to_string()).unwrap();
+        let mut tls = connector
+            .connect(server_name, client)
+            .await
+            .expect("client TLS");
+
+        // Send a request over the decrypted channel and read the status line.
+        tls.write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+        let mut buf = Vec::new();
+        let _ = tls.read_to_end(&mut buf).await;
+        let text = String::from_utf8_lossy(&buf);
+        text.lines().next().unwrap_or("").to_string()
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn mitm_denies_path_with_403_after_terminating_tls() {
+        // Full real round-trip on the obscura↔lane hop: CONNECT → client TLS
+        // (trusting lane's CA) → a request on a DENIED path. The host/port gate
+        // passes (allowlisted host), lane terminates the client TLS with a minted
+        // lane-CA leaf, then the path-aware check denies `/secret` with a 403 over
+        // the decrypted stream — the origin is NEVER contacted (no DNS for the
+        // synthetic host, no connect attempted because policy denies first).
+        let _home = home_with_ca();
+
+        // A synthetic allowlisted host that is NOT localhost / not an IP literal,
+        // so check_addr passes. The leaf is minted on demand by the MITM handler.
+        let mut policy = WebPolicy::default().allow_host("app.test");
+        policy.guard_ip_literals = false;
+        policy = policy.allow_port(443).deny_path("/secret");
+        let proxy = GovernedProxy::start_with_options(policy, None, true)
+            .await
+            .unwrap();
+
+        let status = mitm_request_status(proxy.socket_addr(), "app.test", 443, "/secret").await;
+        assert!(
+            status.contains("403"),
+            "denied path must 403, got {status:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn mitm_allows_path_terminates_tls_and_keeps_real_origin_validation() {
+        // Full real round-trip: CONNECT → client TLS (trusting lane's CA) → a
+        // request on an ALLOWED path. lane terminates the client TLS with a minted
+        // lane-CA leaf, governs ALLOW, logs the full URL, then re-originates REAL,
+        // validated TLS to the true upstream. The synthetic host does not resolve
+        // (no DNS), so forwarding fails at the real network/TLS step and surfaces
+        // as a 502 — proving the request was ALLOWED (not 403) and that
+        // re-origination validation was NOT weakened. (A 200 would mean validation
+        // was bypassed; a 403 would mean governance wrongly denied.)
+        let _home = home_with_ca();
+
+        let mut policy = WebPolicy::default().allow_host("app.test");
+        policy.guard_ip_literals = false;
+        policy = policy.allow_port(443);
+        let proxy = GovernedProxy::start_with_options(policy, None, true)
+            .await
+            .unwrap();
+
+        let status = mitm_request_status(proxy.socket_addr(), "app.test", 443, "/ok").await;
+        assert!(
+            status.contains("502"),
+            "allowed path that cannot be re-originated (real TLS kept) must 502, got {status:?}"
+        );
+    }
+
+    /// Prove the minted MITM leaf is genuinely signed by lane's CA: a client that
+    /// trusts ONLY lane's CA completes the client-TLS handshake the MITM proxy
+    /// presents. (If the leaf were self-signed or untrusted, this would fail.)
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn mitm_leaf_is_lane_ca_signed() {
+        use tokio_rustls::rustls::pki_types::ServerName;
+        let _home = home_with_ca();
+
+        let mut policy = WebPolicy::default().allow_host("app.test");
+        policy.guard_ip_literals = false;
+        policy = policy.allow_port(443);
+        let proxy = GovernedProxy::start_with_options(policy, None, true)
+            .await
+            .unwrap();
+
+        let mut client = TcpStream::connect(proxy.socket_addr()).await.unwrap();
+        client
+            .write_all(b"CONNECT app.test:443 HTTP/1.1\r\n\r\n")
+            .await
+            .unwrap();
+        let ack = read_status_line(&mut client).await;
+        assert!(ack.contains("200"), "ack: {ack:?}");
+        let mut crlf = [0u8; 2];
+        client.read_exact(&mut crlf).await.unwrap();
+
+        let connector = client_tls_trusting_lane_ca();
+        let server_name = ServerName::try_from("app.test".to_string()).unwrap();
+        // The handshake succeeding IS the assertion: the leaf chains to lane's CA.
+        let _tls = connector
+            .connect(server_name, client)
+            .await
+            .expect("client trusting lane CA must accept the minted leaf");
     }
 }

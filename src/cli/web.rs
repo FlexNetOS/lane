@@ -63,13 +63,14 @@ pub async fn run(args: &WebArgs) -> Result<()> {
     let cfg = config::load().context("loading config")?;
     let policy = cfg.web_policy();
     let obscura = cfg.obscura();
+    let tls_inspect = cfg.web_tls_inspect();
     let ca_pem = crate::cert::ca_cert_path();
     let ca_pem = ca_pem.to_string_lossy();
 
     let kind = op.kind();
     let target = op.target().to_string();
 
-    match web::run(&policy, &obscura, &ca_pem, &op).await {
+    match web::run(&policy, &obscura, &ca_pem, tls_inspect, &op).await {
         Ok(outcome) => {
             if json {
                 print_json(outcome.op, &outcome.target, true, None);

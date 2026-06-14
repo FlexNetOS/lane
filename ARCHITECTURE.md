@@ -524,16 +524,24 @@ pub async fn run(policy:&WebPolicy, cfg:&ObscuraConfig, ca_pem_path:&str, op:&We
 // src/web/proxy.rs — lane's OWN governed forward proxy (ALWAYS compiled + unit-tested; no obscura dep):
 pub struct GovernedProxy { /* loopback listener + accept task */ }
 impl GovernedProxy {
-  pub async fn start(policy: WebPolicy) -> Result<GovernedProxy>;                      // bind 127.0.0.1:0, spawn accept loop (direct egress)
-  pub async fn start_with_upstream(policy: WebPolicy, upstream: Option<String>) -> Result<GovernedProxy>; // v1: upstream=Some → fail-closed Err (chaining not yet supported)
+  pub async fn start(policy: WebPolicy) -> Result<GovernedProxy>;                      // bind 127.0.0.1:0, spawn accept loop (direct egress, no MITM)
+  pub async fn start_with_upstream(policy: WebPolicy, upstream: Option<String>) -> Result<GovernedProxy>; // upstream=Some → chain allowed egress through it (after governance); no MITM
+  pub async fn start_with_options(policy: WebPolicy, upstream: Option<String>, tls_inspect: bool) -> Result<GovernedProxy>; // full options: optional upstream chaining + optional TLS-inspect (MITM)
   pub fn addr(&self) -> String;        // "http://127.0.0.1:<port>" to hand obscura's --proxy
   pub fn socket_addr(&self) -> SocketAddr;
   pub fn shutdown(&self);              // abort accept loop; also runs on Drop (RAII)
 }
-//   CONNECT host:port → webpolicy.check_addr(host,port,Https): ALLOW → 200 + copy_bidirectional to upstream TcpStream; DENY → 403, never connects.
+//   CONNECT host:port → webpolicy.check_addr(host,port,Https) FIRST (both modes): DENY → 403, never connects.
+//     ALLOW + tls_inspect=false (default) → 200 + copy_bidirectional opaque TLS bytes to upstream TcpStream (no MITM).
+//     ALLOW + tls_inspect=true → handle_connect_mitm: 200 ack → terminate client TLS with a per-host leaf signed by lane's CA
+//       (cert::ensure_leaf_cert + load_leaf_tls; obscura trusts lane's CA via --ca) → on the decrypted stream loop over requests
+//       (keep-alive): reconstruct https://host[:port]/path, webpolicy.check(url) PATH-AWARE deny-by-default → DENY → 403 over TLS;
+//       ALLOW → forward via in-tree reqwest (RE-ORIGINATING REAL, VALIDATED TLS to the true upstream; honors upstream chaining) →
+//       relay response back over the client TLS stream. Fail-closed: any TLS/parse/leaf/forward error logs + closes (NEVER an
+//       ungoverned tunnel fallback). MITM is on the obscura↔lane hop only — lane↔origin keeps full cert validation.
 //   absolute-form HTTP (GET http://host/…) → webpolicy.check(url): ALLOW → forward via in-tree reqwest, relay response; DENY → 403. Malformed/origin-form → 403 (fail-closed).
-//   EVERY request (ALLOW and DENY) logged via crate::log::info ("web-egress ALLOW/DENY …") — the single observability point (ADR §4).
-//   NO TLS MITM: webpolicy is host/port-level so CONNECT-level governance matches its granularity exactly. The plan's --ca is forward-compat for a future path-level MITM mode (not built).
+//   EVERY request (ALLOW and DENY) logged via crate::log::info ("web-egress ALLOW/DENY <METHOD> <url>") — the single observability point (ADR §4).
+//   tunnel-mode (default) governs at host/port; inspect-mode governs at full-URL/path. MITM is OPT-IN (config web_tls_inspect, default false).
 ```
 **Emitted obscura CLI (matches obscura's REAL `crates/obscura-cli` surface; requires obscura ≥ the
 Phase A1-2 `--ca` capability):** `plan()` emits obscura's **globals first**, then its `fetch`
@@ -573,35 +581,49 @@ stealth, built `--features stealth`).
 **`obscura_proxy` = OPTIONAL upstream (semantics change).** `obscura_proxy` is no longer the proxy
 obscura points at (obscura points at lane's governed proxy). It is repurposed as the optional
 **upstream** lane's governed proxy chains *allowed* traffic through *after* governance — so an org can
-still route governed egress via a corporate proxy. **v1 implements the direct case fully**
-(`obscura_proxy` unset → governed proxy connects directly). If `obscura_proxy` IS set,
-`GovernedProxy::start_with_upstream` returns a clear, **fail-closed** error
-("upstream proxy chaining not yet supported; unset `obscura_proxy`") rather than silently ignoring it
-and leaking traffic direct — never a silent drop. Upstream chaining is future work.
+still route governed egress via a corporate proxy. Both cases are implemented: `obscura_proxy` unset →
+the governed proxy connects directly; `obscura_proxy` set (validated `http://host:port`) → allowed HTTP
+egresses via a reqwest client pointed at the upstream and allowed CONNECTs tunnel via a **nested
+CONNECT** through it (a malformed upstream URL is rejected at `start`, fail-closed). Governance always
+runs **first** — a denied target never reaches the upstream. The MITM (`tls_inspect`) path likewise
+honors the upstream chain when forwarding decrypted requests.
 
 **Config keys** (in `src/config`, all `#[serde(default)]` → old `.lane.yaml` still parses; inert
 without the feature): `obscura_bin/obscura_proxy: Option<String>`, `obscura_stealth: bool`,
 `obscura_user_agent: Option<String>`, `web_allow_hosts/web_allow_domains: Vec<String>`,
-`web_allow_ports: Vec<u16>`. `Config::obscura() -> ObscuraConfig { bin, proxy, stealth, user_agent }`
+`web_allow_ports: Vec<u16>`, `web_deny_paths/web_allow_paths: Vec<String>` (path-rule prefixes; only
+enforced when a full URL/path is seen — plain-HTTP forward + TLS-inspect), and
+`web_tls_inspect: bool` (**default false**; opt-in TLS-inspection/MITM for the governed proxy).
+`Config::obscura() -> ObscuraConfig { bin, proxy, stealth, user_agent }`
 applies `LANE_OBSCURA_{BIN,PROXY,STEALTH,USER_AGENT}` env overlays (env wins; empty string does not
 override the file; stealth OR-ed). `Config::web_policy() -> WebPolicy` builds the deny-by-default gate
-from the allow-lists (empty `web_allow_ports` keeps `{80,443}`).
+from the allow-lists (empty `web_allow_ports` keeps `{80,443}`) **plus the `web_deny_paths` /
+`web_allow_paths` path rules**. `Config::web_tls_inspect() -> bool` returns the flag OR the
+`LANE_WEB_TLS_INSPECT` env override (truthy ⇒ on).
 
 CLI: `lane web open <url>` / `lane web run <script> --url <url>` (`src/cli/web.rs`), both `--json`
 (`{op, target, allowed, error?}`). The command is **always present** (so `lane web --help` works in the
 default build); only the live action is gated. Flow: `config::load` → `web_policy()` → `obscura()` →
-`web::run(...)`. In a `--features obscura` build this now: gates the entry URL → starts lane's governed
-proxy → spawns real obscura pinned through it → every egress connection is policy-checked + logged →
+`web_tls_inspect()` → `web::run(policy, obscura, ca_pem, tls_inspect, op)`. In a `--features obscura`
+build this now: gates the entry URL → starts lane's governed proxy (with the config's `tls_inspect`) →
+spawns real obscura pinned through it → every egress connection is policy-checked + logged →
 shuts the proxy down on exit. The default build still fail-closes after the gate with the clear "rebuild
 with `--features obscura`" error. `obscura_bin` must point at a real obscura binary. Build live:
 `cargo build --features obscura`.
 
+**Path-level TLS-inspect (MITM) — IMPLEMENTED, opt-in.** With `web_tls_inspect: true` (default false),
+allowed HTTPS `CONNECT`s are TLS-terminated and governed at the full-URL/path level: lane mints a
+per-host leaf signed by its **own CA** (which obscura already trusts via the always-emitted `--ca`),
+decrypts the obscura↔lane hop, runs the path-aware `webpolicy::check(url)` on each request (so
+`web_deny_paths` / `web_allow_paths` bite on HTTPS), logs the full URL, then **re-originates real,
+validated TLS** to the true upstream (lane↔origin keeps normal cert validation). Off ⇒ opaque CONNECT
+tunnels governed at host/port (matching webpolicy's tunnel granularity). The two granularities:
+tunnel-mode = host/port; inspect-mode = full-URL/path. MITM only ever intercepts obscura's OWN governed
+egress, never third-party traffic, and fails closed on any error (never an ungoverned tunnel).
+
 **NEXT (deferred to Phase A1, NOT built here):** a daemon IPC / MCP `lane_web` dispatcher so agents
 reach the seam the same way they reach obscura's MCP — but through lane's gate (reusing `web::authorize`
-+ `webpolicy::check_ip` at resolution time), and **upstream-proxy chaining** for the governed proxy
-(currently fail-closed). A future **path-level MITM mode** could use the already-emitted `--ca` to
-inspect TLS payloads; the current governed proxy is connection-level (host/port), matching webpolicy's
-granularity.
++ `webpolicy::check_ip` at resolution time).
 
 ## src/relay  (lane-original — Phase C; ADR-0002 cross-machine relay)
 
