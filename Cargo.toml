@@ -106,3 +106,8 @@ panic = "abort"
 [features]
 default = []
 acme = ["dep:instant-acme"]
+# Governed-egress `lane web` seam (ADR-0001 Option B). obscura is spawned as an
+# EXTERNAL CHILD PROCESS, not linked as a crate, so the feature gates only the
+# live-spawn code path and pulls in NO new dependency. The default build compiles
+# none of the live spawn; the pure policy/gate/spawn-plan layer is always built.
+obscura = []

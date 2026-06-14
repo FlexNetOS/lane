@@ -728,6 +728,105 @@ lane inspect myapp.test      # only requests for myapp.test
 lane inspect | head          # non-interactive snapshot (piped)
 ```
 
+## web
+
+Governed web egress through obscura — every request is gated by lane's **deny-by-default** policy and
+pinned through lane's own proxy (ADR-0001, the lane↔obscura network seam).
+
+### Synopsis
+
+```
+lane web open <url> [--json]
+lane web run <script> --url <url> [--json]
+```
+
+### Description
+
+`lane web` is lane's governed gateway to obscura, a headless-browser engine. lane spawns obscura as a
+managed child process, forces its web egress **through lane**, makes it trust lane's CA, and checks
+every requested URL against a **deny-by-default policy** *before* obscura ever runs. This is what makes
+agent web access "under lane's network control" — at the packet level, not by convention.
+
+- `lane web open <url>` — navigate to a URL.
+- `lane web run <script> --url <url>` — run a local automation script, starting at `--url`.
+
+**Deny-by-default.** With no allow-list configured, every target is denied. A target is allowed only
+when it matches an allow rule **and** trips none of the SSRF guards (loopback, private/RFC1918,
+link-local incl. cloud metadata, etc.). Non-`http`/`https` schemes and disallowed ports are denied.
+
+**Feature-gated live spawn.** The live obscura spawn is behind the `obscura` cargo feature. The command
+is always available (`lane web --help` works in any build), but actually launching obscura requires a
+binary built with `--features obscura`:
+
+```bash
+cargo build --features obscura     # or: cargo install … --features obscura
+```
+
+Without the feature, `lane web` still parses and runs the policy gate, then — for an **allowed** target
+— fails closed with: `obscura integration is not enabled in this build; rebuild with --features obscura
+once obscura is integrated (Phase A1)`. A **denied** target reports the denial in every build.
+
+> The daemon / MCP `lane_web` dispatcher (so agents reach this seam through lane's gate) is the
+> documented next step once obscura is integrated; the CLI here is the v1 surface.
+
+### Arguments
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `url` (open) | string | The absolute `http`/`https` URL to navigate to (policy-checked). |
+| `script` (run) | string | Path to the local automation script obscura runs. |
+
+### Flags
+
+| Flag | Applies to | Meaning |
+|---|---|---|
+| `--url <url>` | `run` | The initial navigation target (the policy-checked URL). |
+| `--json` | both | Emit a machine-readable result: `{ "op", "target", "allowed", "error"? }`. |
+
+`--json` output shape:
+
+```json
+{ "op": "open", "target": "https://example.com/", "allowed": true }
+```
+
+On a denied or failed op, `allowed` is `false`, an `"error"` field carries the reason, and the command
+exits non-zero.
+
+### Policy & config keys
+
+The allow-list and obscura spawn settings live in `~/.lane/config.yaml` (all optional; absent keys keep
+the deny-everything default and old configs still parse):
+
+| Key | Type | Meaning |
+|---|---|---|
+| `web_allow_hosts` | list of string | Exact-host allow rules (e.g. `api.example.com`). |
+| `web_allow_domains` | list of string | Domain-suffix allow rules — the domain and any sub-domain. |
+| `web_allow_ports` | list of int | Allowed destination ports (empty ⇒ `{80, 443}`). |
+| `obscura_bin` | string | Path to the obscura binary — **never** resolved from `$PATH`. |
+| `obscura_proxy` | string | lane-controlled proxy listener egress is pinned through (e.g. `http://127.0.0.1:10443`). |
+| `obscura_stealth` | bool | Enable obscura's anti-detect / stealth mode. |
+| `obscura_user_agent` | string | Override the User-Agent obscura presents. |
+
+Env overlays (env wins over the file): `LANE_OBSCURA_BIN`, `LANE_OBSCURA_PROXY`,
+`LANE_OBSCURA_STEALTH` (`1`/`true`/`yes`/`on`), `LANE_OBSCURA_USER_AGENT`.
+
+### Examples
+
+```bash
+# Deny-by-default: with no allow-list, this is denied.
+lane web open https://example.com/
+
+# Allow a domain, then open a page (needs a --features obscura build to spawn).
+#   ~/.lane/config.yaml:  web_allow_domains: [ example.com ]
+lane web open https://example.com/
+
+# Machine-readable result.
+lane web open https://example.com/ --json
+
+# Run an automation script starting at a target URL.
+lane web run ./scrape.js --url https://example.com/products --json
+```
+
 ## doctor
 
 Diagnose setup issues and print a pass/warn/fail checklist.

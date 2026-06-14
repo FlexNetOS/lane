@@ -1,6 +1,9 @@
 # ADR-0001 — The lane ↔ obscura network seam
 
-- **Status:** Accepted (design) — implementation **GATED on Phase A** (see Sequencing). W2 deliverable.
+- **Status:** Accepted (design); **seam mechanism implementation APPROVED and UNDERWAY** (owner-ratified
+  2026-06-13). The pure gate + spawn-planner + feature-gated `lane web` CLI are built now; the **live
+  obscura wiring remains GATED on Phase A1** (obscura integration). W2 deliverable. (See Sequencing +
+  Status log.)
 - **Date:** 2026-06-13
 - **Deciders:** FlexNetOS (owner) · lane maintainers
 - **Workstream:** W2 (network) of the estate upgrade mission
@@ -176,3 +179,11 @@ wall so the seam's governance/trust contract holds across fleet nodes, not just 
 
 > Earlier drafts of this ADR listed the seam as the immediate "next" step; that was a sequencing error
 > — Phase A is the gate.
+
+---
+
+## Status log
+
+| Date | Change |
+|------|--------|
+| 2026-06-13 | Owner ratified building the **Phase B seam mechanism now**, fail-closed and feature-gated, ahead of A1's live obscura integration. Landed: the always-compiled pure layer — `webpolicy` gate (shipped earlier), `web::{WebOp, ObscuraSpawn, authorize, run}` (governed-op model, the egress-pinning spawn **plan**, the deny-by-default gate), config keys (`obscura_bin/proxy/stealth/user_agent`, `web_allow_hosts/domains/ports`) + `LANE_OBSCURA_*` env overlays, and the `lane web open`/`lane web run` CLI (always present; `--json`). Live obscura spawn is behind the `obscura` cargo feature; without it `lane web` authorizes then fails closed with a clear "rebuild with `--features obscura` (Phase A1)" error (mirrors `lane start --acme`). **Still deferred to A1:** the live child spawn wiring is untested against a real obscura, and the daemon/MCP `lane_web` dispatcher is the documented next step (not built — CLI is the v1 surface). |
