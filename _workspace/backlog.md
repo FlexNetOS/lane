@@ -72,7 +72,7 @@ lane-loop crew.
 - [x] `lane config template` — SHIPPED: `project::render_template()` (pure, commented starter `.lane.yaml` that round-trips through `load`) + `src/cli/config.rs` (`lane config template --domain/--port/--output/--force`); no new deps (format!, not a template-engine crate). ARCHITECTURE.md + docs/commands.md updated; +2 tests (242 green). Third Phase-7 Round B item (Phase A2).
 
 ### Lower priority (nice-to-have, larger scope)
-- [ ] Multi-hop tunnel support — proxy chains through intermediate hosts (gost-style). For developers behind NAT/firewall who need to share a local port through their company's VPN. Affects: tunnel wire protocol, client/server state machine.
+- [x] Multi-hop tunnel support — proxy chains through intermediate hosts (gost-style). — PR #38 MERGED. `lane share --hop [scheme://][user:pass@]host:port` (socks5 default | http), applied in order before the wss dial; new `src/tunnel/hops.rs` (HopSpec+FromStr, 16 tests) + `src/tunnel/dialer.rs` (SOCKS5 RFC 1928/1929 + HTTP CONNECT chaining over tokio TCP, self-contained, NO wire change, NO new dep, 13 tests) + `ClientOptions.hops`, credential-redacted Via line + JSON `hops`. 261→301 tests. Only the live cross-host chain is un-CI-able (feature-pattern like ACME), documented. **Completes Phase-7 Round B (6/6).**
 - [x] Request inspection TUI (`lane inspect`) — SHIPPED: new pure `src/inspect.rs` (Entry::parse + State selection, 5 tests) + `src/cli/inspect.rs` (crossterm alt-screen/raw-mode/key-event TUI tailing the access log; comfy-table render; non-TTY snapshot fallback; 7 tests). New dep `crossterm` (already in-tree via comfy-table → 0 new transitive deps). Scope: renders the request metadata lane logs; body capture/modify is a documented future ceiling. ARCHITECTURE.md + docs/commands.md updated; +12 tests (254 green). Fourth Phase-7 Round B item (Phase A2).
 
 <!-- Discovered 2026-06-08 from external tool survey in docs/reference/repositories.md -->
@@ -96,13 +96,22 @@ Surfaced 2026-06-13 by tracing lane's intent/vision across the meta census
 stealth agent web access."* Full trace: [`docs/VISION.md`](../docs/VISION.md). This is
 **Phase-7's ceiling, not churn** — it is the chartered W2 workstream.
 
-- [~] **lane↔obscura seam ADR (W2 deliverable)** — DRAFTED 2026-06-13 at
-  `docs/adr/ADR-0001-lane-obscura-network-seam.md` (Proposed; recommends Option B = governed-egress
-  proxy seam). Awaiting owner ratification. → then implement.
-- [ ] **Governed `lane web` surface** (feature-gated `obscura`) — spawn obscura as a managed child,
-  pin its egress through lane, gate every op via a pure deny-by-default `webpolicy` (SSRF/loopback
-  validator), log via lane's access-log. Mirrors weave's WL-049/ADR-0002 seam shape. Affects: new
-  `src/web/` (+ `webpolicy`), CLI `lane web`, daemon dispatcher, config (`obscura_*`).
+- [x] **lane↔obscura seam ADR (W2 deliverable)** — RATIFIED 2026-06-13 (owner authorized via the
+  /lane-loop "next 5 tasks" decision: Option B). `docs/adr/ADR-0001-…` status → "Accepted (design);
+  seam mechanism implementation APPROVED and UNDERWAY"; live obscura wiring still gated on Phase A1.
+- [x] **Governed `lane web` surface** (feature-gated `obscura`) — SHIPPED as the seam **mechanism**,
+  fail-closed (ACME pattern), across two PRs:
+  - PR #39 MERGED — `src/webpolicy.rs`: pure deny-by-default SSRF/loopback/RFC1918/ULA/link-local
+    (incl. 169.254.169.254 metadata)/CGNAT/non-http/port-allowlist validator + IPv4-mapped-v6 +
+    userinfo-injection hardening; exact-host + domain-suffix allowlist; `check`/`check_addr`/`check_ip`
+    (the daemon's resolution-time rebinding hook). +28 tests.
+  - PR #40 MERGED — `src/web/mod.rs` (`WebOp`, `authorize()` deny-by-default gate, `ObscuraSpawn::plan()`
+    pure pinned-argv+env builder [egress ALWAYS proxied, bin from config never $PATH], `#[cfg(feature=
+    "obscura")]` live tokio::process spawn + access-log) + `lane web open/run` CLI (`--json`) + config
+    `obscura_*`/web-allowlist (`#[serde(default)]`, LANE_OBSCURA_* env). `obscura = []` feature, NO new
+    dep (child process, not linked — rejected Option A). 329→351 tests (350 w/ --features obscura).
+    NOTE: live obscura child-spawn + daemon/MCP `lane_web` dispatcher remain gated on Phase A1 (obscura
+    estate integration, separate repo) — documented as the next step, NOT built.
 - [ ] **lane relay — cross-machine networking (the STANDING WALL)** — close the census-flagged gap
   (`NEEDS-HUMAN.md` "lane relay unfinished → cross-machine paths unreliable"; `GAP-REGISTER.md`
   "lane relay (cross-machine) still unfinished — standing wall"). Reliable trusted connectivity across
