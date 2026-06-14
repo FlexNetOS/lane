@@ -81,7 +81,28 @@ pub struct Config {
     /// (`{80, 443}`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub web_allow_ports: Vec<u16>,
+
+    // --- cross-machine relay (ADR-0002) ----------------------------------------
+    // All `#[serde(default)]` so a `.lane.yaml` written before the relay existed
+    // still parses. Inert without the `relay` cargo feature.
+    /// Deny-by-default trusted-node allowlist: the NodeIds (64-char hex) this node
+    /// accepts inbound relay connections from. Empty ⇒ trust nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relay_trusted_nodes: Vec<String>,
+    /// Relay mode: `peer` (direct-preferred p2p; default) or `relay` (run as a
+    /// rendezvous/relay node). `None`/empty ⇒ `peer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_mode: Option<String>,
+    /// Optional DERP/relay fallback server URLs. Empty ⇒ iroh's default relays
+    /// (or none, when the mode/feature disables relaying).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relay_servers: Vec<String>,
 }
+
+/// Relay mode: direct-preferred peer (default) or a rendezvous/relay node.
+pub const RELAY_MODE_PEER: &str = "peer";
+/// Relay mode running as a rendezvous/relay node.
+pub const RELAY_MODE_RELAY: &str = "relay";
 
 fn is_false(b: &bool) -> bool {
     !*b
@@ -256,6 +277,16 @@ impl Config {
             policy = policy.allow_ports(self.web_allow_ports.iter().copied());
         }
         policy
+    }
+
+    /// The effective relay mode: the configured value normalized, or the default
+    /// (`peer`). An unrecognized value falls back to `peer` (fail-safe: never
+    /// silently run as a relay node).
+    pub fn relay_effective_mode(&self) -> String {
+        match self.relay_mode.as_deref().map(|m| m.trim().to_lowercase()) {
+            Some(ref m) if m == RELAY_MODE_RELAY => RELAY_MODE_RELAY.to_string(),
+            _ => RELAY_MODE_PEER.to_string(),
+        }
     }
 
     /// Index of the domain with the given name, if present.
@@ -711,6 +742,54 @@ mod tests {
         ] {
             std::env::remove_var(k);
         }
+    }
+
+    // --- cross-machine relay config (ADR-0002) ------------------------------
+
+    #[test]
+    fn relay_defaults_are_inert() {
+        let cfg = Config::default();
+        assert!(cfg.relay_trusted_nodes.is_empty());
+        assert_eq!(cfg.relay_mode, None);
+        assert!(cfg.relay_servers.is_empty());
+        // Default mode is peer (never silently a relay node).
+        assert_eq!(cfg.relay_effective_mode(), RELAY_MODE_PEER);
+    }
+
+    #[test]
+    fn old_config_without_relay_fields_still_parses() {
+        // A config written before the relay existed (no relay_* keys).
+        let yaml = "domains:\n  - name: myapp.test\n    port: 3000\n";
+        let cfg: Config = serde_yaml::from_str(yaml).expect("parse pre-relay config");
+        assert_eq!(cfg.domains.len(), 1);
+        assert!(cfg.relay_trusted_nodes.is_empty());
+        assert_eq!(cfg.relay_effective_mode(), RELAY_MODE_PEER);
+    }
+
+    #[test]
+    fn relay_config_round_trips_through_yaml() {
+        let cfg = Config {
+            relay_trusted_nodes: vec![
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+            ],
+            relay_mode: Some("relay".into()),
+            relay_servers: vec!["https://relay.example.test".into()],
+            ..Default::default()
+        };
+        let yaml = serde_yaml::to_string(&cfg).expect("serialize");
+        let back: Config = serde_yaml::from_str(&yaml).expect("deserialize");
+        assert_eq!(back.relay_trusted_nodes.len(), 1);
+        assert_eq!(back.relay_effective_mode(), RELAY_MODE_RELAY);
+        assert_eq!(back.relay_servers, vec!["https://relay.example.test"]);
+    }
+
+    #[test]
+    fn relay_unknown_mode_falls_back_to_peer() {
+        let cfg = Config {
+            relay_mode: Some("bogus".into()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.relay_effective_mode(), RELAY_MODE_PEER);
     }
 
     #[test]

@@ -63,6 +63,9 @@ src/proxy/            ⇐ internal/proxy          (server.rs; handler.rs; health
 src/service.rs        lane-original (Phase 7): OS service-unit generation (systemd/launchd)
 src/inspect.rs        lane-original (Phase 7): request-inspector data model (parse + selection)
 src/acme.rs           lane-original (Phase 7): ACME HTTP-01 issuance; live path gated by `acme` feature
+src/webpolicy.rs      lane-original (Phase 8; ADR-0001): pure deny-by-default web-egress policy gate
+src/web/              lane-original (Phase 8; ADR-0001): governed `lane web` seam; live spawn gated by `obscura` feature
+src/relay/            lane-original (Phase C; ADR-0002): cross-machine relay (iroh); allowlist.rs/identity.rs pure, live.rs gated by `relay` feature
 src/setup/            ⇐ internal/setup
 src/doctor/           ⇐ internal/doctor         (mod.rs + trust check cfg-gated)
 src/daemon/           ⇐ internal/daemon         (mod.rs run/detach/ipc-handlers; socket.rs; protocol.rs)
@@ -599,6 +602,96 @@ reach the seam the same way they reach obscura's MCP — but through lane's gate
 (currently fail-closed). A future **path-level MITM mode** could use the already-emitted `--ca` to
 inspect TLS payloads; the current governed proxy is connection-level (host/port), matching webpolicy's
 granularity.
+
+## src/relay  (lane-original — Phase C; ADR-0002 cross-machine relay)
+
+The **cross-machine relay**: every lane node is a relay-capable **iroh** (QUIC p2p) peer in a trusted
+fleet mesh. A node accepts inbound connections **only** from NodeIds on a **deny-by-default
+trusted-node allowlist**, and — before bridging a relayed request to a local service — runs the
+**same** deny-by-default `crate::webpolicy` check + access-log it runs for local traffic. That is
+**governance-across-the-link**: a cross-machine request is trust-checked, webpolicy-checked, and logged
+at the **destination** node exactly like a local one (ADR-0002 §"governance composition"; mirrors
+`src/web/proxy.rs` GovernedProxy semantics — same deny+log shape, reusing `webpolicy`).
+
+The iroh transport is behind the **`relay` cargo feature** (`relay = ["dep:iroh", "iroh/tls-ring"]`);
+the default build compiles none of it. **MSRV 1.89** (`rust-version` in `Cargo.toml`) is driven by
+modern iroh — the default (no-relay) build still compiles on the pinned stable toolchain. The
+**security core and wire framing are always compiled and tested** in every build.
+
+**Transport / iroh 0.98 API used** (read the vendored source, not older iroh — 0.98 renamed
+`NodeId`/`NodeAddr` → `EndpointId`/`EndpointAddr`): `iroh::Endpoint::builder(presets::Minimal)`
+(`Minimal` needs the `tls-ring` crypto provider — matches lane's process-wide ring provider via
+`install_crypto_provider()`), `.secret_key(SecretKey).alpns(vec![b"lane/relay/1"]).relay_mode(..).bind()`;
+`endpoint.id() -> EndpointId`, `endpoint.addr() -> EndpointAddr`, `endpoint.accept()` →
+`Incoming::await` → `Connection`, `conn.remote_id() -> EndpointId`, `conn.accept_bi()/open_bi()` →
+`(SendStream, RecvStream)`. Streams implement tokio `AsyncRead`/`AsyncWrite`, so the bridge is
+`tokio::io::copy_bidirectional` between `tokio::io::join(recv, send)` and a local `TcpStream`.
+
+`src/relay/allowlist.rs` — **pure, always-compiled, deny-by-default node trust** (the security core):
+```rust
+pub fn is_trusted(allowlist: &[String], node_id: &str) -> bool;  // empty allowlist ⇒ trust NOTHING
+pub fn parse_node_id(id: &str) -> Result<String, String>;        // validate 64-hex-char NodeId shape
+pub fn normalize_node_id(id: &str) -> String;                     // lowercase + trim
+```
+
+`src/relay/identity.rs` — node identity (path helpers pure; load/gen `#[cfg(feature="relay")]`):
+```rust
+pub fn relay_dir() -> PathBuf;        // ~/.lane/relay (0700)
+pub fn node_key_path() -> PathBuf;    // ~/.lane/relay/node.key (0600, 32-byte secret as 64-hex)
+#[cfg(feature="relay")] pub fn load_or_generate_secret_key() -> Result<SecretKey>;  // stable across runs
+#[cfg(feature="relay")] pub fn node_id_string(key: &SecretKey) -> String;           // derived NodeId
+```
+
+`src/relay/mod.rs` — **wire protocol** (pure, always-compiled + unit-tested):
+- **ALPN:** `lane/relay/1` (`RELAY_ALPN`).
+- **Request frame** (connector → acceptor, on a fresh bi-stream): 2-byte big-endian length `N` +
+  `N` UTF-8 bytes of `host:port` (`TargetRequest::{encode,parse,wire_string}`; bracketed IPv6
+  `[::1]:443` supported; `MAX_TARGET_LEN`).
+- **Response frame** (acceptor → connector): 1 status byte — `RESP_OK` (0, allowed + connected; opaque
+  bridged bytes follow) or `RESP_DENIED` (1) + 2-byte BE reason length + UTF-8 reason
+  (`encode_denied`).
+
+`src/relay/live.rs` — iroh transport (`#[cfg(feature="relay")]`):
+```rust
+pub struct RelayEndpoint { /* bound iroh Endpoint */ }
+impl RelayEndpoint {
+    pub async fn bind(secret_key: SecretKey, relay_mode: RelayMode) -> Result<RelayEndpoint>;
+    pub fn node_id(&self) -> String;  pub fn endpoint(&self) -> &Endpoint;  pub async fn close(&self);
+}
+pub struct AcceptConfig { pub trusted_nodes: Vec<String>, pub policy: WebPolicy }
+// THE GOVERNED ACCEPT LOOP (governance-across-the-link):
+//   accept → reject if !is_trusted(remote_id)  (deny-by-default node trust, log + close)
+//          → read TargetRequest frame
+//          → policy.check_addr(host, port, Https)  (SAME webpolicy as local; deny → error frame, NO connect, log)
+//          → TcpStream::connect((host,port)) → RESP_OK → copy_bidirectional   (ALLOW; log)
+pub async fn run_accept_loop(endpoint: &Endpoint, config: AcceptConfig) -> Result<()>;
+// CONNECT side: dial trusted node → open_bi → send TargetRequest → read status → bridge local ⇄ stream
+pub async fn connect_and_bridge(endpoint:&Endpoint, peer:EndpointAddr, target:&TargetRequest, local:TcpStream) -> Result<()>;
+pub async fn serve_local_bridge(endpoint:Endpoint, peer:EndpointAddr, target:TargetRequest, listener:TcpListener) -> Result<()>;
+pub fn relay_mode_from_config(cfg:&Config) -> RelayMode;  // peer|relay → RelayMode::Default (NAT traversal + DERP fallback)
+pub fn endpoint_addr_from_parts(node_id:EndpointId, direct:impl IntoIterator<Item=SocketAddr>) -> EndpointAddr;
+```
+
+**Config keys** (in `src/config`, all `#[serde(default)]` → old `.lane.yaml` still parses; inert
+without the feature): `relay_trusted_nodes: Vec<String>` (deny-by-default NodeId allowlist),
+`relay_mode: Option<String>` (`peer`|`relay`; default `peer`; unknown ⇒ `peer`),
+`relay_servers: Vec<String>` (optional DERP fallback URLs). `Config::relay_effective_mode() -> String`.
+
+CLI: `src/cli/relay.rs` — `lane relay up` (start the governed node; `--json {node_id, listening,
+trusted_count}`), `lane relay connect <NodeId>/<host:port> [--local-port N]` (bridge a local port to a
+governed remote service), `lane relay trust/untrust <NodeId>` (manage the allowlist, persisted to
+config), `lane relay status` (`--json`). The whole family is **always present** (so `lane relay --help`
+works in the default build); only the iroh-using `up`/`connect` are feature-gated — without the feature
+they fail closed with "rebuild with `--features relay`" (mirrors `lane web` / `lane start --acme`). The
+allowlist/identity/config PURE logic is always compiled and tested.
+
+**Hermetic two-node tests** (`#[cfg(feature="relay")]`, in `src/relay/live.rs`): two in-process iroh
+`Endpoint`s bound with `RelayMode::Disabled` + **direct addressing** (node B's `EndpointAddr` =
+NodeId + its bound loopback `ip_addrs()`, handed to node A's `connect`) — **no real internet/DERP**.
+Proofs: (1) two-node reachability — A opens a stream to B and bytes round-trip through a governed bridge
+to a local echo; (2) governance-across-the-link — a target denied by B's webpolicy is refused (error
+frame, **no upstream connect**, logged) while an allowed target bridges, AND an **untrusted** node's
+connection is rejected (deny-by-default).
 
 ## src/setup  (⇐ internal/setup)
 

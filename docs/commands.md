@@ -872,6 +872,94 @@ lane web open https://example.com/ --json
 lane web run ./scrape.js --url https://example.com/products --json
 ```
 
+## relay
+
+Cross-machine **lane relay** (ADR-0002): every lane node is a relay-capable **iroh** (QUIC p2p) peer in
+a trusted fleet mesh. A node accepts inbound connections **only** from NodeIds on a **deny-by-default
+trusted-node allowlist**, and — before bridging a relayed request to a local service — runs the **same**
+deny-by-default web policy + access-log it runs for local traffic. This is **governance-across-the-link**:
+a cross-machine request is trust-checked, webpolicy-checked, and logged at the **destination** node
+exactly like a local one. iroh provides NAT traversal (hole-punching + DERP relay fallback), so fleet
+nodes behind different NATs/firewalls can reach each other.
+
+The iroh transport is behind the **`relay` cargo feature** (needs MSRV 1.89, modern iroh). The whole
+`lane relay` family still **parses** in a default build, but the iroh-using actions (`up`, `connect`)
+fail closed with "rebuild with `--features relay`". The allowlist/identity/status logic works in every
+build.
+
+### Synopsis
+
+```
+lane relay up [--json]
+lane relay connect <NodeId>/<host:port> [--local-port N] [--json]
+lane relay trust <NodeId> [--json]
+lane relay untrust <NodeId> [--json]
+lane relay status [--json]
+```
+
+### Description
+
+- `lane relay up` — join the fleet mesh as a node: start the iroh peer (creating the persistent node
+  identity at `~/.lane/relay/node.key`, `0600`, on first run), print this node's **NodeId**, and run the
+  **governed accept loop**. `--json` prints `{node_id, listening, trusted_count}`.
+- `lane relay connect <NodeId>/<host:port> [--local-port N]` — open a **governed** stream to a service
+  on a trusted remote node and bridge a local loopback port to it. The `host:port` is on the **remote**
+  node's side and is governed by **that** node's web policy (deny-by-default). With `--local-port N` the
+  bridge binds `127.0.0.1:N`; otherwise an ephemeral port.
+- `lane relay trust <NodeId>` / `lane relay untrust <NodeId>` — manage the deny-by-default trusted-node
+  allowlist, persisted to `~/.lane/config.yaml` (`relay_trusted_nodes`). `trust` validates the NodeId
+  shape (64-char hex) and de-dups; `untrust` is idempotent.
+- `lane relay status` — show this node's NodeId (if an identity exists), mode, the `relay` feature
+  state, and the trusted nodes. `--json` for the machine-readable shape.
+
+**Deny-by-default node trust.** With an **empty** allowlist, no node can connect — there is no
+"trust all" and no implicit self-trust. The accept loop rejects any remote NodeId not on the list
+(logged) before reading anything from the connection.
+
+**Governance-across-the-link.** For a *trusted* connection, the accepting node reads the requested
+`host:port`, runs `webpolicy.check_addr(host, port)` built from **its own** allow-list config, and:
+
+- **DENY** → sends an error frame and **never** connects to the local service (logged
+  `relay DENY … (reason)`).
+- **ALLOW** → connects to the local `host:port` and bridges bytes, after logging `relay ALLOW …`.
+
+So reaching a service across the relay is access-logged and policy-checked at the destination exactly
+like a local request — only the transport differs.
+
+### Config keys
+
+In `~/.lane/config.yaml` (all optional; an old config without them still parses; inert without the
+`relay` feature):
+
+- `relay_trusted_nodes: [<NodeId>, …]` — deny-by-default trusted-node allowlist.
+- `relay_mode: peer|relay` — `peer` (direct-preferred p2p; default) or `relay` (rendezvous/relay-node
+  role). Unknown values fall back to `peer`.
+- `relay_servers: [<url>, …]` — optional DERP/relay fallback URLs.
+
+The accepting node's web policy reuses the **same** `web_allow_hosts` / `web_allow_domains` /
+`web_allow_ports` keys as `lane web` (deny-by-default; empty ⇒ nothing reachable).
+
+### Examples
+
+```bash
+# Build with the relay enabled.
+cargo build --features relay
+
+# On node B: start the node and note its NodeId.
+lane relay up --json            # {"node_id":"<B>","listening":true,"trusted_count":0}
+
+# On node B: trust node A and allow a local service to be reached.
+lane relay trust <A-NodeId>
+#   ~/.lane/config.yaml:  web_allow_hosts: [ 127.0.0.1 ]   (and a web_allow_ports entry)
+
+# On node A: bridge a local port to B's service (governed by B's policy).
+lane relay connect <B-NodeId>/127.0.0.1:3000 --local-port 8080
+#   → http://127.0.0.1:8080 on A now reaches 127.0.0.1:3000 on B, if B allows it.
+
+# Inspect relay state.
+lane relay status --json
+```
+
 ## doctor
 
 Diagnose setup issues and print a pass/warn/fail checklist.
