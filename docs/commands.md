@@ -758,21 +758,36 @@ network control" — at the packet level, not by convention.
 proxy bound to an ephemeral loopback port, then pins obscura's egress to it. For each connection obscura
 opens, the proxy applies the **same deny-by-default policy**:
 
-- `CONNECT host:port` (every `https://` origin obscura reaches) → host/port is policy-checked; allowed
-  connections are tunneled byte-for-byte to the origin (lane does **not** decrypt the TLS — see below),
-  denied ones get `403` and never reach the origin.
-- absolute-form plain HTTP (`GET http://host/…`) → the URL is policy-checked; allowed requests are
-  forwarded and the response relayed, denied ones get `403`.
+- `CONNECT host:port` (every `https://` origin obscura reaches) → host/port is policy-checked first;
+  denied ones get `403` and never reach the origin. Allowed connections are, by default, tunneled
+  byte-for-byte to the origin (lane does **not** decrypt the TLS); with **TLS-inspect** enabled
+  (`web_tls_inspect: true`, opt-in) they are instead decrypted and governed at the full-URL/path level
+  (see below).
+- absolute-form plain HTTP (`GET http://host/…`) → the URL is policy-checked (path rules included);
+  allowed requests are forwarded and the response relayed, denied ones get `403`.
 
-Every request — allowed and denied — is written to lane's access log (`web-egress ALLOW …` /
-`web-egress DENY … (reason)`), the single place all governed agent web traffic is observable. When
-obscura exits, lane shuts the proxy down.
+Every request — allowed and denied — is written to lane's access log (`web-egress ALLOW <METHOD> <url>`
+/ `web-egress DENY <METHOD> <url> (reason)`), the single place all governed agent web traffic is
+observable. When obscura exits, lane shuts the proxy down.
 
-**No TLS interception (by design).** lane's governed proxy does **not** man-in-the-middle TLS; it
-governs HTTPS at the `CONNECT` host/port level. That matches exactly what the policy decides on
-(host + port + scheme), so connection-level governance is sufficient and complete for this policy. lane
-still emits `--ca` to obscura — that is forward-compatibility for a possible future path-level
-inspection mode; the current proxy does not use it to decrypt.
+**Two governance granularities: tunnel-mode vs inspect-mode.** By default lane's governed proxy governs
+HTTPS at the **`CONNECT` host/port level** (tunnel-mode) — it does not man-in-the-middle TLS, matching
+host/port/scheme policy exactly. With `web_tls_inspect: true` (default **false**, opt-in) the proxy
+governs HTTPS at the **full-URL/path level** (inspect-mode):
+
+- The host/port `CONNECT` gate still runs **first** (deny → `403`, no connect).
+- On allow, lane terminates obscura's TLS using a **per-host leaf signed by lane's own CA** — which
+  obscura already trusts because lane always passes it `--ca <ca.pem>`. lane then reads each decrypted
+  request, reconstructs the full `https://host/path` URL, and applies the path-aware policy (so
+  `web_deny_paths` / `web_allow_paths` apply to HTTPS too), logging the full URL.
+- Allowed requests are forwarded to the **true origin over real, validated TLS** (lane re-originates a
+  normal HTTPS connection and verifies the origin's real certificate — interception is only on the
+  obscura↔lane hop, which lane controls); denied paths get a `403` over the decrypted channel.
+- Inspect-mode intercepts **only obscura's own governed egress** (never third-party traffic) and fails
+  **closed** on any TLS/leaf/forward error — it never falls back to an ungoverned tunnel.
+
+Leave `web_tls_inspect` off if host/port governance is enough; turn it on when you need per-path control
+(e.g. allow `api.example.com/v1` but deny `/admin`) over HTTPS.
 
 **How lane drives obscura.** lane invokes obscura's REAL CLI: globals first
 (`--proxy <governed-proxy-addr> --ca <ca.pem> --allow-private-network [--user-agent <ua>]`), then
@@ -808,11 +823,12 @@ child spawn is feature-gated.)
 **Prerequisites for the live path.** Build lane `--features obscura`; build a real obscura binary (with
 the `--ca` capability, and `--features stealth` if you use `obscura_stealth`) and point `obscura_bin` at
 it; configure an allow-list (`web_allow_hosts` / `web_allow_domains`) — with none, everything is denied.
-Leave `obscura_proxy` unset for direct egress (upstream chaining is not yet supported).
+Leave `obscura_proxy` unset for direct egress, or set it to an `http://host:port` upstream proxy to
+chain allowed egress through it (after governance). Set `web_tls_inspect: true` only if you need
+per-path HTTPS control (otherwise host/port governance applies).
 
-> The daemon / MCP `lane_web` dispatcher (so agents reach this seam through lane's gate) and
-> upstream-proxy chaining for the governed proxy are the documented next steps; the CLI here is the v1
-> surface.
+> The daemon / MCP `lane_web` dispatcher (so agents reach this seam through lane's gate) is the
+> documented next step; the CLI here is the v1 surface.
 
 ### Arguments
 
@@ -847,13 +863,17 @@ the deny-everything default and old configs still parse):
 | `web_allow_hosts` | list of string | Exact-host allow rules (e.g. `api.example.com`). |
 | `web_allow_domains` | list of string | Domain-suffix allow rules — the domain and any sub-domain. |
 | `web_allow_ports` | list of int | Allowed destination ports (empty ⇒ `{80, 443}`). |
+| `web_deny_paths` | list of string | Path **deny** prefixes (e.g. `/admin`). Only enforced where a full URL/path is seen — plain-HTTP forward requests and (HTTPS) **inspect-mode** (`web_tls_inspect`). A matching path is denied **after** host/port/scheme/SSRF pass. Empty ⇒ none denied by path. |
+| `web_allow_paths` | list of string | Path **allow** prefixes. When **non-empty**, a full-URL path must match one or the request is denied. Empty ⇒ all paths allowed (back-compat). `web_deny_paths` is evaluated first. Only enforced where a path is seen (same as above). |
+| `web_tls_inspect` | bool | **Default `false`.** Opt-in **TLS-inspection / MITM** for the governed proxy. Off ⇒ HTTPS `CONNECT`s are opaque tunnels (host/port governance). On ⇒ lane terminates obscura's TLS with a per-host leaf signed by lane's CA (obscura trusts it via `--ca`), governs each request at the full-URL/path level (so `web_deny_paths`/`web_allow_paths` bite on HTTPS), logs the full URL, then re-originates real, validated TLS to the true origin. Intercepts only obscura's own governed egress. |
 | `obscura_bin` | string | Path to a real obscura binary — **never** resolved from `$PATH`. Required for the live path. |
-| `obscura_proxy` | string | **Optional upstream** proxy lane's governed proxy chains *allowed* egress through (after governance), e.g. a corporate proxy. **v1 supports the direct case only**: if set, `lane web` fails closed with "upstream proxy chaining not yet supported; unset `obscura_proxy`" — it is **not** the proxy obscura is pinned to (that is always lane's own governed proxy). Leave unset for direct egress. |
+| `obscura_proxy` | string | **Optional upstream** proxy lane's governed proxy chains *allowed* egress through (after governance), e.g. a corporate proxy. Validated `http://host:port`; allowed HTTP egresses via it and allowed `CONNECT`s tunnel via a nested CONNECT through it. It is **not** the proxy obscura is pinned to (that is always lane's own governed proxy). Leave unset for direct egress. |
 | `obscura_stealth` | bool | Enable obscura's anti-detect / stealth mode. |
 | `obscura_user_agent` | string | Override the User-Agent obscura presents. |
 
 Env overlays (env wins over the file): `LANE_OBSCURA_BIN`, `LANE_OBSCURA_PROXY`,
-`LANE_OBSCURA_STEALTH` (`1`/`true`/`yes`/`on`), `LANE_OBSCURA_USER_AGENT`.
+`LANE_OBSCURA_STEALTH` (`1`/`true`/`yes`/`on`), `LANE_OBSCURA_USER_AGENT`, `LANE_WEB_TLS_INSPECT`
+(`1`/`true`/`yes`/`on` forces inspect-mode on).
 
 ### Examples
 

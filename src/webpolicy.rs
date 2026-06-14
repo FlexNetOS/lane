@@ -16,9 +16,17 @@
 //!
 //! 1. the scheme is `http` or `https` (the only candidate-allowable schemes),
 //! 2. the host matches an allow rule (exact host or domain suffix),
-//! 3. the port is in the allowed-port set (default `{80, 443}`), and
+//! 3. the port is in the allowed-port set (default `{80, 443}`),
 //! 4. if the host is an IP literal, that IP trips no SSRF guard
-//!    (loopback / private / link-local / unspecified / multicast / reserved).
+//!    (loopback / private / link-local / unspecified / multicast / reserved), and
+//! 5. **(full-URL checks only)** the URL path passes the optional path rules:
+//!    it matches no `deny_paths` prefix, and — if `allow_paths` is non-empty —
+//!    matches at least one `allow_paths` prefix. Path rules are evaluated only by
+//!    [`WebPolicy::check`] (which sees a path); the path-less
+//!    [`WebPolicy::check_addr`] / [`WebPolicy::check_ip`] are unaffected and
+//!    govern at host/port granularity. Empty path lists ⇒ all paths allowed
+//!    (back-compat). Matching is a simple prefix (a leading `/foo` matches
+//!    `/foo`, `/foo/bar`).
 //!
 //! # SSRF guards
 //!
@@ -98,6 +106,14 @@ pub enum DenyReason {
     HostNotAllowed(String),
     /// The port is not in the allowed-port set.
     PortNotAllowed(u16),
+    /// The URL path matched a `deny_paths` rule. Only evaluated when a full URL
+    /// (with a path) is seen — i.e. on [`WebPolicy::check`] (plain-HTTP forward
+    /// and TLS-inspect / MITM); never on [`WebPolicy::check_addr`].
+    PathDenied(String),
+    /// A non-empty `allow_paths` allowlist is configured and the URL path matched
+    /// none of its rules (deny-by-default at the path level). Only evaluated when
+    /// a full URL (with a path) is seen.
+    PathNotAllowed(String),
     /// The target is a loopback address (`127.0.0.0/8`, `::1`) or `localhost`.
     Loopback,
     /// The target is a private / RFC1918 address (`10/8`, `172.16/12`,
@@ -129,6 +145,10 @@ impl fmt::Display for DenyReason {
                 write!(f, "host not allowed: {h} (no matching allowlist rule)")
             }
             DenyReason::PortNotAllowed(p) => write!(f, "port not allowed: {p}"),
+            DenyReason::PathDenied(p) => write!(f, "path denied: {p} (matched a deny_paths rule)"),
+            DenyReason::PathNotAllowed(p) => {
+                write!(f, "path not allowed: {p} (no matching allow_paths rule)")
+            }
             DenyReason::Loopback => f.write_str("blocked: loopback address"),
             DenyReason::PrivateNetwork => f.write_str("blocked: private/internal network address"),
             DenyReason::LinkLocal => f.write_str("blocked: link-local address"),
@@ -210,6 +230,27 @@ pub struct WebPolicy {
     pub allow_hosts: Vec<HostRule>,
     /// Allowed destination ports. Defaults to `{80, 443}`.
     pub allow_ports: Vec<u16>,
+    /// Optional **path** deny-list. Each entry is a path prefix (a leading
+    /// `/foo` matches `/foo`, `/foo/bar`, …). When a full URL is checked
+    /// ([`WebPolicy::check`]) and the URL's path matches any entry, the request
+    /// is denied ([`DenyReason::PathDenied`]) — *after* the host/port/scheme/SSRF
+    /// guards pass. Empty (default) ⇒ no path is denied for this reason.
+    ///
+    /// Path rules only bite when a full URL (with a path) is available — plain-
+    /// HTTP forward requests and TLS-inspect (MITM). [`WebPolicy::check_addr`] and
+    /// [`WebPolicy::check_ip`] have no path and are **unaffected**.
+    #[serde(default)]
+    pub deny_paths: Vec<String>,
+    /// Optional **path** allow-list. Each entry is a path prefix (a leading
+    /// `/foo` matches `/foo`, `/foo/bar`, …). When **non-empty** and a full URL
+    /// is checked, the URL's path must match at least one entry or the request is
+    /// denied ([`DenyReason::PathNotAllowed`]). **Empty (default) ⇒ all paths are
+    /// allowed** (back-compat: path-level allow-listing is opt-in).
+    ///
+    /// `deny_paths` is evaluated first, so a path matching both a deny and an
+    /// allow rule is denied.
+    #[serde(default)]
+    pub allow_paths: Vec<String>,
     /// When `true` (default) IP-literal targets are checked against the SSRF
     /// guards. Disabling it is unsafe and intended only for tests; the daemon
     /// must never disable it.
@@ -222,6 +263,8 @@ impl Default for WebPolicy {
         WebPolicy {
             allow_hosts: Vec::new(),
             allow_ports: vec![80, 443],
+            deny_paths: Vec::new(),
+            allow_paths: Vec::new(),
             guard_ip_literals: true,
         }
     }
@@ -266,17 +309,68 @@ impl WebPolicy {
         self
     }
 
+    /// Add a path **deny** rule (builder style). The rule is a path prefix; a
+    /// leading `/foo` matches `/foo` and `/foo/bar`. Only bites on full-URL
+    /// checks ([`WebPolicy::check`]); see [`WebPolicy::deny_paths`].
+    pub fn deny_path(mut self, path: impl Into<String>) -> Self {
+        self.deny_paths.push(path.into());
+        self
+    }
+
+    /// Add a path **allow** rule (builder style). When any allow rule is present,
+    /// a full-URL path must match one or it is denied. The rule is a path prefix;
+    /// a leading `/foo` matches `/foo` and `/foo/bar`. See
+    /// [`WebPolicy::allow_paths`].
+    pub fn allow_path(mut self, path: impl Into<String>) -> Self {
+        self.allow_paths.push(path.into());
+        self
+    }
+
     /// Validate a full target URL, e.g. `https://api.example.com:8443/path`.
     ///
     /// The URL is parsed manually (no DNS, no new dependency): scheme, host,
     /// optional port, with the rest ignored. A missing port defaults to the
     /// scheme's default port. Anything that fails to parse is
     /// [`DenyReason::MalformedTarget`].
+    /// Path rules (`deny_paths` / `allow_paths`) are evaluated **only** here,
+    /// after the host/port/scheme/SSRF guards pass, because a full URL is the
+    /// only shape that carries a path. (`check_addr`/`check_ip` have no path and
+    /// never apply path rules — they govern at host/port granularity.)
     pub fn check(&self, target: &str) -> PolicyDecision {
-        match ParsedTarget::parse(target) {
-            Ok(p) => self.check_addr(&p.host, p.port, p.scheme),
-            Err(reason) => PolicyDecision::Deny(reason),
+        let parsed = match ParsedTarget::parse(target) {
+            Ok(p) => p,
+            Err(reason) => return PolicyDecision::Deny(reason),
+        };
+        let addr_decision = self.check_addr(&parsed.host, parsed.port, parsed.scheme);
+        if addr_decision.is_denied() {
+            return addr_decision;
         }
+        // Host/port/scheme/SSRF all passed: now apply the (optional) path rules.
+        self.check_path(&parsed.path)
+    }
+
+    /// Evaluate the (optional) path rules against a URL path. `deny_paths` is
+    /// checked first (a matching path is denied); then, if `allow_paths` is
+    /// non-empty, the path must match at least one allow rule. An empty
+    /// `allow_paths` allows every path (back-compat). Matching is simple
+    /// prefix-match (a leading `/foo` matches `/foo`, `/foo/bar`, …).
+    fn check_path(&self, path: &str) -> PolicyDecision {
+        if let Some(rule) = self
+            .deny_paths
+            .iter()
+            .find(|rule| path_prefix_matches(rule, path))
+        {
+            return PolicyDecision::Deny(DenyReason::PathDenied(rule.clone()));
+        }
+        if !self.allow_paths.is_empty()
+            && !self
+                .allow_paths
+                .iter()
+                .any(|rule| path_prefix_matches(rule, path))
+        {
+            return PolicyDecision::Deny(DenyReason::PathNotAllowed(path.to_string()));
+        }
+        PolicyDecision::Allow
     }
 
     /// Validate a decomposed target: `host` (a hostname or IP literal), `port`,
@@ -350,6 +444,9 @@ struct ParsedTarget {
     scheme: Scheme,
     host: String,
     port: u16,
+    /// The URL path (everything from the first `/`, query/fragment included),
+    /// normalized so a path-less URL becomes `"/"`. Used only by the path rules.
+    path: String,
 }
 
 impl ParsedTarget {
@@ -386,6 +483,17 @@ impl ParsedTarget {
         // last `@` before the first path/query/fragment delimiter.
         let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
         let authority = &rest[..authority_end];
+        // The remainder (from the first `/`, `?`, or `#`) is the path (+ query /
+        // fragment). A path-less URL normalizes to "/". A `?`/`#`-first form
+        // (no leading slash) is prefixed with "/" so prefix rules still bite.
+        let raw_path = &rest[authority_end..];
+        let path = if raw_path.is_empty() {
+            "/".to_string()
+        } else if raw_path.starts_with('/') {
+            raw_path.to_string()
+        } else {
+            format!("/{raw_path}")
+        };
         let host_port = match authority.rsplit_once('@') {
             Some((_userinfo, hp)) => hp,
             None => authority,
@@ -404,8 +512,20 @@ impl ParsedTarget {
             )));
         }
 
-        Ok(ParsedTarget { scheme, host, port })
+        Ok(ParsedTarget {
+            scheme,
+            host,
+            port,
+            path,
+        })
     }
+}
+
+/// `true` if `path` starts with the `rule` prefix. A leading `/foo` matches
+/// `/foo` and `/foo/bar`. The match is a literal byte-prefix; callers pass paths
+/// already prefixed with `/` (see [`ParsedTarget::parse`]).
+fn path_prefix_matches(rule: &str, path: &str) -> bool {
+    path.starts_with(rule)
 }
 
 /// Split `host[:port]`, handling bracketed IPv6 literals (`[::1]:443`). Returns
@@ -977,10 +1097,96 @@ mod tests {
 
     #[test]
     fn policy_round_trips_through_serde() {
-        let p = example_policy().allow_port(8443);
+        let p = example_policy().allow_port(8443).deny_path("/admin");
         let json = serde_json::to_string(&p).unwrap();
         let back: WebPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);
         assert!(back.check("https://api.example.com:8443/").is_allowed());
+        assert!(back.check("https://api.example.com:8443/admin").is_denied());
+    }
+
+    // --- path rules ---------------------------------------------------------
+
+    #[test]
+    fn deny_path_blocks_matching_path() {
+        let p = WebPolicy::default()
+            .allow_domain("example.com")
+            .deny_path("/secret");
+        // Non-matching path is allowed (host/port/scheme already pass).
+        assert!(p.check("https://example.com/ok").is_allowed());
+        // Exact match denied.
+        assert_eq!(
+            p.check("https://example.com/secret").deny_reason(),
+            Some(&DenyReason::PathDenied("/secret".to_string()))
+        );
+        // Prefix match denied (/secret matches /secret/files).
+        assert_eq!(
+            p.check("https://example.com/secret/files").deny_reason(),
+            Some(&DenyReason::PathDenied("/secret".to_string()))
+        );
+    }
+
+    #[test]
+    fn allow_paths_restricts_to_listed_prefixes() {
+        let p = WebPolicy::default()
+            .allow_domain("example.com")
+            .allow_path("/api");
+        // Matching prefix allowed.
+        assert!(p.check("https://example.com/api").is_allowed());
+        assert!(p.check("https://example.com/api/v1/users").is_allowed());
+        // Anything outside the allow-list is denied.
+        assert_eq!(
+            p.check("https://example.com/other").deny_reason(),
+            Some(&DenyReason::PathNotAllowed("/other".to_string()))
+        );
+        // A path-less URL normalizes to "/", which does not match "/api".
+        assert!(p.check("https://example.com").is_denied());
+    }
+
+    #[test]
+    fn empty_path_lists_allow_all_paths() {
+        // Back-compat: no path rules ⇒ every path allowed (only host/port govern).
+        let p = WebPolicy::default().allow_domain("example.com");
+        assert!(p.check("https://example.com/").is_allowed());
+        assert!(p.check("https://example.com/anything/at/all").is_allowed());
+        assert!(p.check("https://example.com/secret").is_allowed());
+    }
+
+    #[test]
+    fn deny_path_wins_over_allow_path() {
+        // deny_paths is evaluated first: a path matching both is denied.
+        let p = WebPolicy::default()
+            .allow_domain("example.com")
+            .allow_path("/api")
+            .deny_path("/api/admin");
+        assert!(p.check("https://example.com/api/users").is_allowed());
+        assert_eq!(
+            p.check("https://example.com/api/admin/reset").deny_reason(),
+            Some(&DenyReason::PathDenied("/api/admin".to_string()))
+        );
+    }
+
+    #[test]
+    fn check_addr_ignores_path_rules() {
+        // check_addr has no path: path rules must NOT apply (it governs at
+        // host/port granularity, e.g. for opaque CONNECT tunnels).
+        let p = WebPolicy::default()
+            .allow_host("example.com")
+            .deny_path("/secret")
+            .allow_path("/only-this");
+        assert!(p.check_addr("example.com", 443, Scheme::Https).is_allowed());
+    }
+
+    #[test]
+    fn path_rules_apply_after_host_port_guards() {
+        // A denied host is rejected by the host guard, not by a path rule, even
+        // if the path would have matched an allow rule.
+        let p = WebPolicy::default()
+            .allow_domain("allowed.test")
+            .allow_path("/api");
+        assert_eq!(
+            p.check("https://blocked.test/api").deny_reason(),
+            Some(&DenyReason::HostNotAllowed("blocked.test".to_string()))
+        );
     }
 }

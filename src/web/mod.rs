@@ -277,6 +277,7 @@ pub async fn run(
     policy: &WebPolicy,
     config: &ObscuraConfig,
     ca_pem_path: &str,
+    tls_inspect: bool,
     op: &WebOp,
 ) -> Result<WebOutcome> {
     // Gate first, in every build: deny-by-default precedes any feature check.
@@ -288,7 +289,7 @@ pub async fn run(
         anyhow::bail!("denied: {reason}");
     }
 
-    run_authorized(policy, config, ca_pem_path, op).await?;
+    run_authorized(policy, config, ca_pem_path, tls_inspect, op).await?;
 
     Ok(WebOutcome {
         op: op.kind(),
@@ -315,15 +316,19 @@ async fn run_authorized(
     policy: &WebPolicy,
     config: &ObscuraConfig,
     ca_pem_path: &str,
+    tls_inspect: bool,
     op: &WebOp,
 ) -> Result<()> {
     use anyhow::Context;
 
     // Start lane's governed proxy. The user's obscura_proxy becomes the optional
-    // upstream (v1: direct only, fail closed on upstream — never a silent drop).
-    let governed = GovernedProxy::start_with_upstream(policy.clone(), config.proxy.clone())
-        .await
-        .context("starting lane governed proxy")?;
+    // upstream (chained after governance). `tls_inspect` (config
+    // `web_tls_inspect`, default off) opts into request/path-level MITM of
+    // obscura's HTTPS egress; off ⇒ opaque CONNECT tunnels (host/port only).
+    let governed =
+        GovernedProxy::start_with_options(policy.clone(), config.proxy.clone(), tls_inspect)
+            .await
+            .context("starting lane governed proxy")?;
     let proxy_addr = governed.addr();
 
     // Pin obscura to LANE'S governed proxy (not the user's raw config). Every
@@ -372,6 +377,7 @@ async fn run_authorized(
     _policy: &WebPolicy,
     _config: &ObscuraConfig,
     _ca_pem_path: &str,
+    _tls_inspect: bool,
     _op: &WebOp,
 ) -> Result<()> {
     anyhow::bail!(
@@ -711,10 +717,16 @@ mod tests {
         let op = WebOp::Open {
             url: "https://blocked.com/".into(),
         };
-        let err = run(&policy, &cfg(Some("/x"), Some("http://p")), "/ca.pem", &op)
-            .await
-            .unwrap_err()
-            .to_string();
+        let err = run(
+            &policy,
+            &cfg(Some("/x"), Some("http://p")),
+            "/ca.pem",
+            false,
+            &op,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("denied"), "{err}");
         assert!(!err.contains("--features obscura"), "{err}");
     }
@@ -728,10 +740,16 @@ mod tests {
         let op = WebOp::Open {
             url: "https://example.com/".into(),
         };
-        let err = run(&policy, &cfg(Some("/x"), Some("http://p")), "/ca.pem", &op)
-            .await
-            .unwrap_err()
-            .to_string();
+        let err = run(
+            &policy,
+            &cfg(Some("/x"), Some("http://p")),
+            "/ca.pem",
+            false,
+            &op,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("--features obscura"), "{err}");
         assert!(err.contains("Phase A1"), "{err}");
     }
