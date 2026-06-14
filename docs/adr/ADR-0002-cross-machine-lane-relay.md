@@ -1,8 +1,8 @@
 # ADR-0002 — The cross-machine lane relay
 
-- **Status:** Proposed (design only). This ADR exists to **settle the architecture** of the standing
-  wall so it can be built and verified later; **implementation is owner-gated** and does not begin on
-  this ADR's authority. Phase **C** in ADR-0001's sequencing (A → B → C).
+- **Status:** **Accepted** (owner-ratified 2026-06-13); **implementation UNDERWAY** — the
+  feature-gated `relay` surface (iroh peer, node identity, deny-by-default trusted-node allowlist,
+  governed cross-machine streams) is being built now. Phase **C** in ADR-0001's sequencing (A → B → C).
 - **Date:** 2026-06-13
 - **Deciders:** FlexNetOS (owner) · lane maintainers
 - **Workstream:** W2 (network) of the estate upgrade mission
@@ -175,3 +175,4 @@ the lane at the _destination_ node, identically to the local case.**
 | Date | Change |
 |------|--------|
 | 2026-06-13 | Proposed. Architecture recommendation: Option A (iroh p2p + relay fallback), per-node webpolicy governance, `lane share` kept as the public-ingress case. Awaiting owner ratification; implementation owner-gated (Phase C). |
+| 2026-06-13 | **Accepted** — owner ratified Option A. Implementation begun: feature-gated `relay` (iroh peer + NodeId identity + deny-by-default trusted-node allowlist + governed cross-machine streams + two-node reachability/governance tests). |

@@ -24,6 +24,7 @@ mod login;
 mod logout;
 mod logs;
 mod portfwd;
+mod relay;
 mod restart;
 mod share;
 mod start;
@@ -87,6 +88,8 @@ enum Commands {
     Config(config::ConfigArgs),
     /// Governed web egress via obscura (deny-by-default; needs --features obscura)
     Web(web::WebArgs),
+    /// Cross-machine relay: trusted fleet mesh + governed streams (needs --features relay)
+    Relay(relay::RelayArgs),
     /// Diagnose setup issues
     Doctor(DoctorArgs),
     /// Live request-inspector TUI (tails the access log)
@@ -334,6 +337,7 @@ pub async fn run() -> Result<()> {
         Commands::Logout => logout::run().await,
         Commands::Domain(a) => domain::run(&a).await,
         Commands::Web(a) => web::run(&a).await,
+        Commands::Relay(a) => relay::run(&a).await,
         Commands::Doctor(a) => doctor::run(&a).await,
         Commands::Inspect(a) => inspect::run(&a).await,
         Commands::Cert(a) => cert::run(&a).await,

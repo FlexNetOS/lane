@@ -2,7 +2,7 @@
 name = "lane"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.89"
 description = "Clean HTTPS local domains for your dev servers — myapp.test → localhost:3000"
 license = "PolyForm-Shield-1.0.0"
 repository = "https://github.com/FlexNetOS/lane"
@@ -91,6 +91,7 @@ thiserror = "1"
 # upgrade: archive handling
 flate2 = "1"
 tar = "0.4"
+iroh = { version = "0.98.2", default-features = false, optional = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -111,3 +112,13 @@ acme = ["dep:instant-acme"]
 # live-spawn code path and pulls in NO new dependency. The default build compiles
 # none of the live spawn; the pure policy/gate/spawn-plan layer is always built.
 obscura = []
+# Cross-machine relay (ADR-0002). iroh (QUIC p2p + NAT traversal + relay fallback)
+# is OPTIONAL and feature-gated: the default build pulls in none of it. This
+# feature is why the crate rust-version is 1.89 (modern iroh's MSRV); the default
+# (no-relay) build still compiles on the pinned stable toolchain. iroh is pulled
+# in with `default-features = false`; the relay feature re-enables only the one
+# piece the relay needs: `tls-ring` (the rustls crypto provider the
+# `presets::Minimal` endpoint builder requires — matches lane's process-wide ring
+# provider). Hermetic two-endpoint tests use RelayMode::Disabled + direct
+# addressing, so no relay-server (`test-utils`) dependency is needed.
+relay = ["dep:iroh", "iroh/tls-ring"]

@@ -17,6 +17,7 @@ pub mod osutil;
 pub mod project;
 pub mod protocol;
 pub mod proxy;
+pub mod relay;
 pub mod service;
 pub mod setup;
 pub mod system;
