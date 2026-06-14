@@ -11,7 +11,14 @@ last_item: PHASE A1 COMPLETE (obscura estate integration) — followed the "next
         lane #42 (lane-web seam reconciled to obscura's real CLI); network_hub #1 (obscura registered +
         Rust-native validator). meta #35 (.meta.yaml triage) armed but blocked by unrelated meta-main
         Format failure. A1-5 MCP verified via obscura's mcp_client e2e suite. See phase-a1-obscura.md.
-status: ACTIVE — Phase A1 done. NEXT (owner sequence 1→4→3, step 3): return to lane → lane DONE-gate.
+status: ACTIVE — sequence 1→4→3 done + 2 follow-ons shipped (owner-directed). main @ 6457178.
+        - LIVE lane web wiring SHIPPED (#44): src/web/proxy.rs GovernedProxy — lane runs its own forward
+          proxy, obscura egress pinned to it, every CONNECT/HTTP connection webpolicy-checked
+          deny-by-default + access-logged (no MITM; --ca forward-compat). 365 default / 364 obscura.
+        - lane relay ADR WRITTEN (#45): docs/adr/ADR-0002 (Proposed) — iroh p2p + relay-node fallback,
+          per-node webpolicy governance; relay IMPLEMENTATION still owner-gated (Phase C).
+        NEXT (owner-gated, needs ratification/decision): ratify ADR-0002 → implement lane relay (iroh);
+        Phase B seam hardening; GovernedProxy upstream-proxy chaining.
         Earlier this session: "next 5 tasks" delivered (option 1) — Phase-7 Round B 6/6 (multi-hop #38)
         + Phase-8 lane web seam mechanism (webpolicy #39, web seam #40, ADR-0001 ratified).
         - Product altitude: slim parity + full --json (#15-#25); Phase-7 Round A (#26/#27);
