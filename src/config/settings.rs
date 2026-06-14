@@ -49,6 +49,38 @@ pub struct Config {
     pub log_mode: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub cors: bool,
+
+    // --- obscura / `lane web` governed-egress seam (ADR-0001 Option B) ---------
+    // All `#[serde(default)]` so an existing `.lane.yaml` written before the seam
+    // existed still parses. Inert without the `obscura` cargo feature: they are
+    // read by the always-compiled spawn-planner but only the feature build acts
+    // on them. Env overlays (`LANE_OBSCURA_*`) are applied by [`Config::obscura`].
+    /// Path to the obscura binary. Spawned explicitly — never resolved from the
+    /// ambient `$PATH` — so lane controls exactly which engine runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obscura_bin: Option<String>,
+    /// The lane-controlled proxy listener obscura's egress is pinned through
+    /// (e.g. `http://127.0.0.1:10443`). Egress is always routed here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obscura_proxy: Option<String>,
+    /// Enable obscura's anti-detect / stealth mode.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub obscura_stealth: bool,
+    /// Override the User-Agent obscura presents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obscura_user_agent: Option<String>,
+    /// Exact-host allow rules for `lane web` (deny-by-default; empty ⇒ nothing
+    /// is reachable). Reuses the [`crate::webpolicy`] host shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub web_allow_hosts: Vec<String>,
+    /// Domain-suffix allow rules for `lane web` (matches the domain and any
+    /// sub-domain). Reuses the [`crate::webpolicy`] domain-suffix shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub web_allow_domains: Vec<String>,
+    /// Allowed destination ports for `lane web`. Empty ⇒ the webpolicy default
+    /// (`{80, 443}`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub web_allow_ports: Vec<u16>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -152,10 +184,78 @@ impl Domain {
     }
 }
 
+/// Resolved obscura settings: the on-disk config fields with `LANE_OBSCURA_*`
+/// env overlays applied. Built by [`Config::obscura`]; consumed by the
+/// `lane web` spawn planner (`crate::web::ObscuraSpawn`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ObscuraConfig {
+    /// Path to the obscura binary (`LANE_OBSCURA_BIN` overlay).
+    pub bin: Option<String>,
+    /// The lane-controlled proxy egress is pinned through
+    /// (`LANE_OBSCURA_PROXY` overlay).
+    pub proxy: Option<String>,
+    /// Anti-detect / stealth mode (`LANE_OBSCURA_STEALTH` overlay: any of
+    /// `1`/`true`/`yes`/`on`, case-insensitive, enables it).
+    pub stealth: bool,
+    /// User-Agent override (`LANE_OBSCURA_USER_AGENT` overlay).
+    pub user_agent: Option<String>,
+}
+
+/// `true` if an env-var string is a truthy flag (`1`/`true`/`yes`/`on`).
+fn env_truthy(v: &str) -> bool {
+    matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Read a non-empty `LANE_*` string override, else `None`.
+fn env_str(key: &str) -> Option<String> {
+    match std::env::var(key) {
+        Ok(v) if !v.trim().is_empty() => Some(v),
+        _ => None,
+    }
+}
+
 impl Config {
     /// Resolve the effective log mode ("" -> full).
     pub fn effective_log_mode(&self) -> String {
         normalize_log_mode(&self.log_mode)
+    }
+
+    /// Resolved obscura settings: config fields with `LANE_OBSCURA_*` env
+    /// overlays applied (env wins over the file, mirroring the tunnel-server
+    /// overlay pattern). String fields fall back to the file value when the env
+    /// var is unset/empty; `stealth` is OR-ed so the env can force it on.
+    pub fn obscura(&self) -> ObscuraConfig {
+        ObscuraConfig {
+            bin: env_str("LANE_OBSCURA_BIN").or_else(|| self.obscura_bin.clone()),
+            proxy: env_str("LANE_OBSCURA_PROXY").or_else(|| self.obscura_proxy.clone()),
+            stealth: self.obscura_stealth
+                || std::env::var("LANE_OBSCURA_STEALTH")
+                    .map(|v| env_truthy(&v))
+                    .unwrap_or(false),
+            user_agent: env_str("LANE_OBSCURA_USER_AGENT")
+                .or_else(|| self.obscura_user_agent.clone()),
+        }
+    }
+
+    /// Build the deny-by-default [`crate::webpolicy::WebPolicy`] for `lane web`
+    /// from the configured allow-lists. With no allow rules the policy denies
+    /// everything (deny-by-default). An empty `web_allow_ports` keeps the
+    /// webpolicy default port set (`{80, 443}`).
+    pub fn web_policy(&self) -> crate::webpolicy::WebPolicy {
+        let mut policy = crate::webpolicy::WebPolicy::default();
+        for host in &self.web_allow_hosts {
+            policy = policy.allow_host(host.clone());
+        }
+        for domain in &self.web_allow_domains {
+            policy = policy.allow_domain(domain.clone());
+        }
+        if !self.web_allow_ports.is_empty() {
+            policy = policy.allow_ports(self.web_allow_ports.iter().copied());
+        }
+        policy
     }
 
     /// Index of the domain with the given name, if present.
@@ -507,5 +607,138 @@ mod tests {
             validate_log_mode("verbose").is_err(),
             "expected error for invalid log mode"
         );
+    }
+
+    // --- obscura / web seam config ------------------------------------------
+
+    #[test]
+    fn obscura_defaults_are_inert() {
+        let cfg = Config::default();
+        assert_eq!(cfg.obscura_bin, None);
+        assert_eq!(cfg.obscura_proxy, None);
+        assert!(!cfg.obscura_stealth);
+        assert_eq!(cfg.obscura_user_agent, None);
+        assert!(cfg.web_allow_hosts.is_empty());
+        assert!(cfg.web_allow_domains.is_empty());
+        assert!(cfg.web_allow_ports.is_empty());
+    }
+
+    #[test]
+    fn old_config_without_web_fields_still_parses() {
+        // A config written before the seam existed (no obscura_*/web_* keys).
+        let yaml = "domains:\n  - name: myapp.test\n    port: 3000\nlog_mode: minimal\n";
+        let cfg: Config = serde_yaml::from_str(yaml).expect("parse legacy config");
+        assert_eq!(cfg.domains.len(), 1);
+        assert_eq!(cfg.effective_log_mode(), "minimal");
+        // Defaults fill in for the absent seam fields.
+        assert_eq!(cfg.obscura_bin, None);
+        assert!(cfg.web_allow_hosts.is_empty());
+    }
+
+    #[test]
+    fn obscura_config_round_trips_through_yaml() {
+        let cfg = Config {
+            obscura_bin: Some("/opt/obscura/obscura".into()),
+            obscura_proxy: Some("http://127.0.0.1:10443".into()),
+            obscura_stealth: true,
+            obscura_user_agent: Some("lane-web/1".into()),
+            web_allow_hosts: vec!["example.com".into()],
+            web_allow_domains: vec!["api.example.com".into()],
+            web_allow_ports: vec![443, 8443],
+            ..Default::default()
+        };
+        let yaml = serde_yaml::to_string(&cfg).expect("serialize");
+        let back: Config = serde_yaml::from_str(&yaml).expect("deserialize");
+        assert_eq!(back.obscura_bin.as_deref(), Some("/opt/obscura/obscura"));
+        assert_eq!(
+            back.obscura_proxy.as_deref(),
+            Some("http://127.0.0.1:10443")
+        );
+        assert!(back.obscura_stealth);
+        assert_eq!(back.obscura_user_agent.as_deref(), Some("lane-web/1"));
+        assert_eq!(back.web_allow_hosts, vec!["example.com".to_string()]);
+        assert_eq!(back.web_allow_ports, vec![443, 8443]);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn obscura_env_overlay_wins_over_file() {
+        // Guard the process-global env vars we mutate.
+        for k in [
+            "LANE_OBSCURA_BIN",
+            "LANE_OBSCURA_PROXY",
+            "LANE_OBSCURA_STEALTH",
+            "LANE_OBSCURA_USER_AGENT",
+        ] {
+            std::env::remove_var(k);
+        }
+
+        let cfg = Config {
+            obscura_bin: Some("/file/obscura".into()),
+            obscura_proxy: Some("http://file-proxy:1".into()),
+            obscura_stealth: false,
+            obscura_user_agent: Some("file-ua".into()),
+            ..Default::default()
+        };
+
+        // No env: file values flow through unchanged.
+        let resolved = cfg.obscura();
+        assert_eq!(resolved.bin.as_deref(), Some("/file/obscura"));
+        assert_eq!(resolved.proxy.as_deref(), Some("http://file-proxy:1"));
+        assert!(!resolved.stealth);
+        assert_eq!(resolved.user_agent.as_deref(), Some("file-ua"));
+
+        // Env overrides each field; stealth flips on.
+        std::env::set_var("LANE_OBSCURA_BIN", "/env/obscura");
+        std::env::set_var("LANE_OBSCURA_PROXY", "http://env-proxy:2");
+        std::env::set_var("LANE_OBSCURA_STEALTH", "true");
+        std::env::set_var("LANE_OBSCURA_USER_AGENT", "env-ua");
+        let resolved = cfg.obscura();
+        assert_eq!(resolved.bin.as_deref(), Some("/env/obscura"));
+        assert_eq!(resolved.proxy.as_deref(), Some("http://env-proxy:2"));
+        assert!(resolved.stealth);
+        assert_eq!(resolved.user_agent.as_deref(), Some("env-ua"));
+
+        // Empty env string does NOT override the file value (mirrors paths.rs).
+        std::env::set_var("LANE_OBSCURA_BIN", "");
+        assert_eq!(cfg.obscura().bin.as_deref(), Some("/file/obscura"));
+
+        for k in [
+            "LANE_OBSCURA_BIN",
+            "LANE_OBSCURA_PROXY",
+            "LANE_OBSCURA_STEALTH",
+            "LANE_OBSCURA_USER_AGENT",
+        ] {
+            std::env::remove_var(k);
+        }
+    }
+
+    #[test]
+    fn web_policy_is_deny_by_default_and_honors_allow_lists() {
+        use crate::webpolicy::DenyReason;
+
+        // Empty allow-lists ⇒ deny everything.
+        let denied = Config::default().web_policy();
+        assert!(denied.check("https://example.com/").is_denied());
+
+        let cfg = Config {
+            web_allow_hosts: vec!["exact.example.com".into()],
+            web_allow_domains: vec!["example.org".into()],
+            web_allow_ports: vec![443],
+            ..Default::default()
+        };
+        let policy = cfg.web_policy();
+        assert!(policy.check("https://exact.example.com/").is_allowed());
+        assert!(policy.check("https://api.example.org/").is_allowed());
+        // Not in any allow rule ⇒ denied.
+        assert!(matches!(
+            policy.check("https://other.com/").deny_reason(),
+            Some(DenyReason::HostNotAllowed(_))
+        ));
+        // Port 80 is not in the (replaced) allowed-port set.
+        assert!(matches!(
+            policy.check("http://exact.example.com/").deny_reason(),
+            Some(DenyReason::PortNotAllowed(80))
+        ));
     }
 }

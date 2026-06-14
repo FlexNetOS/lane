@@ -468,6 +468,76 @@ impl State { pub fn new(); push(Entry); push_line(&str)->bool; select_next(); se
 ```
 CLI: `lane inspect [name]` (`src/cli/inspect.rs`). New dep: `crossterm` (already in-tree via comfy-table).
 
+## src/webpolicy + src/web  (lane-original — Phase 8; ADR-0001 lane↔obscura seam; no slim counterpart)
+
+The **governed-egress `lane web` seam** (ADR-0001 Option B): lane is the network control plane;
+obscura is a managed web-egress engine that lane spawns and **pins through lane's own proxy + policy**.
+obscura is an **external child process**, never a linked crate. The live spawn is behind the
+**`obscura` cargo feature** (`obscura = []`, no new dependency); the default build compiles none of the
+live spawn but **always** compiles + tests the pure layer (gate + spawn-plan). Deny-by-default
+everywhere.
+
+`src/webpolicy` — pure, I/O-free, deny-by-default validator (the gate):
+```rust
+pub enum Scheme { Http, Https }                                  // only candidate-allowable schemes
+pub enum DenyReason { MalformedTarget(String), SchemeNotAllowed(String), HostNotAllowed(String),
+                      PortNotAllowed(u16), Loopback, PrivateNetwork, LinkLocal, SharedAddress,
+                      Unspecified, Multicast, Reserved }          // serde; Display = actionable msg
+pub enum PolicyDecision { Allow, Deny(DenyReason) }              // is_allowed()/is_denied()/deny_reason()
+pub enum HostRule { Exact(String), DomainSuffix(String) }       // serde
+pub struct WebPolicy { pub allow_hosts: Vec<HostRule>, pub allow_ports: Vec<u16>, pub guard_ip_literals: bool }
+impl Default for WebPolicy;                                       // DENY-EVERYTHING: empty allowlist, ports {80,443}, guards on
+impl WebPolicy { pub fn deny_all()->Self; allow_host(impl Into<String>)->Self; allow_domain(..)->Self;
+                 allow_ports(impl IntoIterator<Item=u16>)->Self; allow_port(u16)->Self;          // builders
+                 pub fn check(&self, target:&str)->PolicyDecision;                                // parse URL → check_addr
+                 pub fn check_addr(&self, host:&str, port:u16, scheme:Scheme)->PolicyDecision;    // core
+                 pub fn check_ip(&self, ip:IpAddr, port:u16)->PolicyDecision; }                   // daemon's resolution-time re-check (anti-rebind)
+```
+DNS is out of scope by design (pure): `check` does not resolve hostnames; re-validating the *resolved*
+IP via `check_ip` is the **daemon's** job (DNS-rebinding defense). IP-literal targets are SSRF-guarded
+regardless of the allowlist.
+
+`src/web` — the seam mechanism (pure layer always compiled; live spawn `#[cfg(feature="obscura")]`):
+```rust
+pub enum WebOp { Open { url: String }, Run { script_path: String, url: String } }   // the governed op
+impl WebOp { pub fn target(&self)->&str;  pub fn kind(&self)->&'static str; }        // "open"|"run"; target = policy-checked URL
+pub fn authorize(policy:&WebPolicy, op:&WebOp) -> Result<(), DenyReason>;            // the gate: runs webpolicy::check before any spawn
+pub struct ObscuraSpawn { pub program: String, pub args: Vec<String>, pub envs: Vec<(String,String)> }  // pure command PLAN (data, runs nothing)
+pub enum SpawnPlanError { MissingBin, MissingProxy }                                 // seam-misconfigured (≠ a policy denial); Display+Error
+impl ObscuraSpawn { pub fn plan(cfg:&ObscuraConfig, ca_pem_path:&str, op:&WebOp) -> Result<ObscuraSpawn, SpawnPlanError>; }
+pub struct WebOutcome { pub op: &'static str, pub target: String, pub allowed: bool }
+pub async fn run(policy:&WebPolicy, cfg:&ObscuraConfig, ca_pem_path:&str, op:&WebOp) -> Result<WebOutcome>;
+//   gate FIRST (deny-by-default precedes any feature check) → then spawn (feature) / fail-closed (no feature)
+// #[cfg(not(feature="obscura"))] run_authorized() → Err: "obscura integration is not enabled … rebuild with --features obscura (Phase A1)"
+```
+**Egress-pinning contract (the heart of "under lane's control at the packet level"):** `plan()` is the
+pure function that enforces it and is fully unit-tested without obscura. The plan ALWAYS (a) takes
+`program` from config (`obscura_bin`), **never** the ambient `$PATH`; (b) sets `--proxy <obscura_proxy>`
+**and** the standard `HTTP_PROXY`/`HTTPS_PROXY` (+ lowercase) + `LANE_OBSCURA_PROXY` env so a
+flag-ignoring obscura build still cannot escape the pin; (c) trusts lane's CA via `--ca <ca_pem_path>`
++ `SSL_CERT_FILE`/`LANE_CA`. `plan()` refuses (`MissingBin`/`MissingProxy`) rather than emit an
+unpinned spawn. The live `run_authorized` (feature) builds a `tokio::process::Command` from the plan,
+logs the governed request via `crate::log::info` (one observable place for all agent web traffic), and
+waits on exit. CA path comes from `crate::cert::ca_cert_path()`.
+
+**Config keys** (in `src/config`, all `#[serde(default)]` → old `.lane.yaml` still parses; inert
+without the feature): `obscura_bin/obscura_proxy: Option<String>`, `obscura_stealth: bool`,
+`obscura_user_agent: Option<String>`, `web_allow_hosts/web_allow_domains: Vec<String>`,
+`web_allow_ports: Vec<u16>`. `Config::obscura() -> ObscuraConfig { bin, proxy, stealth, user_agent }`
+applies `LANE_OBSCURA_{BIN,PROXY,STEALTH,USER_AGENT}` env overlays (env wins; empty string does not
+override the file; stealth OR-ed). `Config::web_policy() -> WebPolicy` builds the deny-by-default gate
+from the allow-lists (empty `web_allow_ports` keeps `{80,443}`).
+
+CLI: `lane web open <url>` / `lane web run <script> --url <url>` (`src/cli/web.rs`), both `--json`
+(`{op, target, allowed, error?}`). The command is **always present** (so `lane web --help` works in the
+default build); only the live action is gated. Flow: `config::load` → `web_policy()` → `obscura()` →
+`web::run(...)`. Build live: `cargo build --features obscura`.
+
+**NEXT (deferred to Phase A1, NOT built here):** a daemon IPC / MCP `lane_web` dispatcher so agents
+reach the seam the same way they reach obscura's MCP — but through lane's gate (reusing `web::authorize`
++ `webpolicy::check_ip` at resolution time). The CLI path above is the **v1 surface**; the live spawn
+wiring is untested against a real obscura until A1 lands.
+
 ## src/setup  (⇐ internal/setup)
 
 ```rust

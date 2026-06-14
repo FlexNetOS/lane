@@ -32,6 +32,7 @@ mod uninstall;
 mod up;
 mod upgrade;
 mod version;
+mod web;
 
 pub(crate) use portfwd::{ingress_ports_reachable, should_reload_port_forwarding};
 
@@ -84,6 +85,8 @@ enum Commands {
     Cert(cert::CertArgs),
     /// Project config helpers (generate a starter .lane.yaml)
     Config(config::ConfigArgs),
+    /// Governed web egress via obscura (deny-by-default; needs --features obscura)
+    Web(web::WebArgs),
     /// Diagnose setup issues
     Doctor(DoctorArgs),
     /// Live request-inspector TUI (tails the access log)
@@ -330,6 +333,7 @@ pub async fn run() -> Result<()> {
         Commands::Login => login::run().await,
         Commands::Logout => logout::run().await,
         Commands::Domain(a) => domain::run(&a).await,
+        Commands::Web(a) => web::run(&a).await,
         Commands::Doctor(a) => doctor::run(&a).await,
         Commands::Inspect(a) => inspect::run(&a).await,
         Commands::Cert(a) => cert::run(&a).await,
