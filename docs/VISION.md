@@ -122,7 +122,9 @@ directory holds ADR-0001…0010 with no network entry).
 2. **Governed agent web-access**: obscura as the egress engine invoked under lane's network
    policy/trust.
 3. **Cross-machine lane relay**: close the standing wall — reliable, trusted connectivity
-   across the edge fleet.
+   across the edge fleet. Architecture settled in
+   [`ADR-0002`](adr/ADR-0002-cross-machine-lane-relay.md) (Proposed; iroh p2p + relay fallback,
+   per-node `webpolicy` governance; implementation owner-gated, Phase C).
 4. Re-tag obscura B (owned) once it carries real integration, and back the empty
    `network_hub` registry with real entries.
 
