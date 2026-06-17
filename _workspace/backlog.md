@@ -123,3 +123,19 @@ stealth agent web access."* Full trace: [`docs/VISION.md`](../docs/VISION.md). T
 NOTE: Phase 8 items are NOT autonomous-loop churn candidates — the seam ADR needs owner ratification
 and the relay needs a design ADR first. Round B (Phase 7 medium/lower) remains the unattended-loop
 backlog; Phase 8 is owner-gated strategic work.
+
+---
+
+## Phase 8 (W2) — Host network plane: adopt-consume + Rust-native portability
+
+- [ ] **lane adopts & consumes the host network plane (ADR-0003)** — owner-directed 2026-06-17:
+  *"direct lane to adopt-consume and rust port the current box's NM so meta is truly portable."*
+  Make lane the Rust-native, declarative source of truth for the **host** network config (today
+  owned by per-box `/etc/netplan` + NetworkManager, so meta is NOT portable). Design + input ready:
+  - ADR: [`docs/adr/ADR-0003-host-network-adopt-consume.md`](../docs/adr/ADR-0003-host-network-adopt-consume.md) (Accepted-design; owner blanket-approved)
+  - Adoption input: [`docs/adopt/host-nm-snapshot-2026-06-17.md`](../docs/adopt/host-nm-snapshot-2026-06-17.md) (sanitized; netplan=SoT, NM=renderer)
+  - **P0 Adopt (read-only):** serde model (superset of netplan v2) + `lane net adopt` (live host → model) + round-trip the snapshot. No host mutation.
+  - **P1 Render:** `lane net apply` for the netplan-NM renderer; additive reconcile (never flush unowned addrs); prove on the `cognitum-seed` link-local case (bounce/reboot durable, never-default).
+  - **P2 Portability:** in-repo per-host profile (`--host <name>` reproduces a box); networkd renderer for non-NM boxes.
+  - **P3 env-ctl seam:** migrate env-ctl `cognitum-seed-net` rendering to a lane network unit (no-downgrade, staged; keep env-ctl PR #115 working until parity proven). Coordinate via weave.
+  - **No-downgrade contract:** adoption is LOSSLESS — every address/route/match/never-default/autoconnect/wifi-key-mgmt/link-local mode round-trips adopt→render unchanged before P3 retires any path. Secrets stay in `secretd`, never inline.
