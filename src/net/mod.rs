@@ -17,12 +17,15 @@
 //!   round-trip tests run in the default build (no feature gate), mirroring how
 //!   [`crate::relay::allowlist`] keeps its pure security core always-built.
 //!
-//! # What will be feature-gated (later slices, not here)
+//! # What is feature-gated
 //!
-//! Only the *effectful* paths take a gate: the adopter that reads the live host
-//! (`nmcli`/`/etc/netplan`/`ip`) and the renderer that mutates it
-//! (`lane net apply`). This slice (P0a) ships **only** the pure model — no host
-//! reader, no CLI, no feature gate — exactly the "pure layer always built,
-//! effectful path gated" precedent the relay module established.
+//! Only the *effectful* paths take the `hostnet` gate: the live host reader in
+//! [`adopt`] (`nmcli`) and — in a later slice — the renderer that mutates the host
+//! (`lane net apply`). The [`adopt`] module is itself always compiled (its pure
+//! [`adopt::parse_nmcli_connection`] text parser is built and tested in every
+//! build); only the thin `nmcli`-spawning wrappers inside it carry the gate. This
+//! is the "pure layer always built, effectful path gated" precedent the relay
+//! module established.
 
+pub mod adopt;
 pub mod model;
