@@ -122,3 +122,15 @@ obscura = []
 # provider). Hermetic two-endpoint tests use RelayMode::Disabled + direct
 # addressing, so no relay-server (`test-utils`) dependency is needed.
 relay = ["dep:iroh", "iroh/tls-ring"]
+# Host network plane adopt-consume (ADR-0003). The live host READER
+# (`lane net adopt`) shells out to `nmcli` — an EXTERNAL CHILD PROCESS, never
+# linked as a crate, exactly as lane already shells to `iptables`/`security`/
+# `sudo` — so the feature gates only the live-read code path and pulls in NO new
+# dependency (it uses `std::process` + the already-present `serde_yaml`). The
+# default build compiles none of the live reader; the pure, always-tested netplan
+# superset model (`net::model`) and the nmcli text PARSER (`net::adopt::
+# parse_nmcli_connection`) are built and tested in every build — only the
+# `nmcli`-spawning wrapper and the `lane net` CLI subcommand take the gate,
+# mirroring how `obscura`/`relay` keep their pure core always-built and fail
+# closed ("rebuild with `--features hostnet`") without the feature.
+hostnet = []

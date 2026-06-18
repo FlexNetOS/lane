@@ -723,6 +723,74 @@ cover): see [`docs/relay-validation.md`](docs/relay-validation.md) — an operat
 real two-host relay (direct vs relayed path, governance refusal at the target, deny-by-default trust)
 and for pinning self-hosted DERP relays via `relay_servers`.
 
+## src/net  (lane-original — W2; ADR-0003 host network-plane adopt-consume)
+
+lane's **host network plane**: a Rust-native, declarative, **lossless superset of netplan v2** that
+lane *adopts* from the live host and (later slices) *consumes* (diff/render/reconcile) so a box is
+reproducible from the repo. Always-compiled pure layer + feature-gated effectful reader, mirroring the
+`relay`/`web` "pure core always built, live path gated" precedent.
+
+### src/net/model  (P0a — always compiled, always tested)
+
+```rust
+pub struct NetworkDocument { pub network: Network }       // mirrors a netplan v2 file
+pub struct Network { pub version: u8, pub renderer: Option<Renderer>,
+                     pub ethernets/wifis/bridges: BTreeMap<String, _Unit> }   // units keyed by stable netplan unit id
+pub enum   Renderer { NetworkManager /* "NetworkManager" */, Networkd /* "networkd" */ }
+pub struct EthernetUnit / WifiUnit / BridgeUnit { match, set-name, addresses, routes,
+                     dhcp4/6, nameservers, wakeonlan, networkmanager, … }       // common netplan/NM field superset
+pub struct MatchRule { name, macaddress }                  // reconciliation identity = match+name, NOT the NM UUID
+pub struct NmPassthrough { name, uuid, passthrough: BTreeMap<String,String> }  // lossless escape hatch for arbitrary NM keys
+pub struct AccessPoint { key_mgmt, password: Option<SecretRef> }
+pub struct SecretRef { pub secretd: String }               // PSK/802.1x is ALWAYS a secretd reference, never inline material
+```
+
+A literal secret is **unrepresentable** in the model (only `SecretRef`), so it is always safe to commit.
+`BTreeMap` for unit/passthrough maps → semantically-lossless, deterministic serialization, no new dep.
+
+### src/net/adopt  (P0b — pure parser always compiled; `nmcli` reader behind `hostnet`)
+
+```rust
+// PURE (no host access) — built & unit-tested in every build:
+pub fn parse_nmcli_connection(lines: &[&str], nm_type: &str) -> Option<Unit>;  // terse nmcli text → model unit
+pub fn is_secret_property(prop: &str) -> bool;             // *.psk/*.password/*.key/802-1x.*password* → never copied
+pub enum UnitKind { Ethernet, Wifi, Bridge }  pub fn UnitKind::from_nm_type(&str) -> Option<UnitKind>;
+pub enum Unit { Ethernet{id,unit} | Wifi{id,unit} | Bridge{id,unit} }  // unit + its netplan map key
+pub fn Unit::id(&self) -> &str;   pub fn Unit::insert_into(self, &mut NetworkDocument);
+
+// LIVE nmcli reader — #[cfg(feature = "hostnet")] only:
+pub struct ConnectionRef { name, nm_type, device }
+pub fn list_connections() -> Result<Vec<ConnectionRef>>;  // nmcli -t -f NAME,TYPE,DEVICE connection show
+pub fn adopt_connection(name: &str) -> Result<Option<Unit>>;   // nmcli -t -f all connection show <NAME>
+pub fn adopt_all() -> Result<NetworkDocument>;            // adopt every host-plane connection
+```
+
+**Source = nmcli, NOT `/etc/netplan`.** nmcli reads the full connection config **unprivileged** (no
+sudo/human wall) and **secret-safe**: without `--show-secrets` (which lane **never** passes — guarded by
+a fixed-args allowlist + `debug_assert!`) nmcli masks every credential slot as `<hidden>`. `/etc/netplan`
+is root-only (mode 600) and can carry raw PSK/802.1x material. **Parse rule** (verified on nmcli 1.54):
+terse lines are `setting.property:value`; nmcli does **not** escape colons in values (`seen-bssids:AA:29:…`),
+so the field name is up to the first colon and the value is the line remainder. **Sanitizing is twofold:**
+(1) any `is_secret_property` line is dropped — its value is never read; (2) a `SecretRef` is emitted only
+when **`key-mgmt`** actually requires a credential (`sae`/`wpa-psk`→psk, `wpa-eap`→802.1x password) — NOT
+inferred from the always-masked value, so OWE/open APs carry **no** ref. **Passthrough** keeps only
+affirmative host intent (NM `0`/`0x0`/`false`/`default`/`-1`/`auto` sentinels are dropped) so diffs stay
+meaningful; `yes`/`no` normalize to `true`/`false` to match the adopted snapshot shape.
+
+### src/cli/net  (`lane net adopt`)
+
+`lane net adopt [--connection <name>] [--json]` reads the host plane and prints the model (YAML default,
+JSON with `--json`) to stdout — **read-only, no host mutation**. The command always parses (`lane net
+--help` works in the default build); the live read is gated behind `hostnet` and fails closed without it
+("rebuild with `--features hostnet`"), mirroring `lane web`/`lane relay`. `lane net apply` (P1 renderer)
+is intentionally **not** present yet (no dead command).
+
+```toml
+# Cargo.toml — gates only the live nmcli reader + CLI path; pulls in NO new dependency
+# (uses std::process + the already-present serde_yaml), like obscura/relay:
+hostnet = []
+```
+
 ## src/setup  (⇐ internal/setup)
 
 ```rust
