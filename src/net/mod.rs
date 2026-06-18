@@ -20,12 +20,14 @@
 //! # What is feature-gated
 //!
 //! Only the *effectful* paths take the `hostnet` gate: the live host reader in
-//! [`adopt`] (`nmcli`) and — in a later slice — the renderer that mutates the host
-//! (`lane net apply`). The [`adopt`] module is itself always compiled (its pure
-//! [`adopt::parse_nmcli_connection`] text parser is built and tested in every
-//! build); only the thin `nmcli`-spawning wrappers inside it carry the gate. This
-//! is the "pure layer always built, effectful path gated" precedent the relay
-//! module established.
+//! [`adopt`] (`nmcli`) and the host-mutating apply step in [`apply`]
+//! ([`apply::apply_plan`], `nmcli`). The [`adopt`] and [`apply`] modules are
+//! themselves always compiled — [`adopt::parse_nmcli_connection`] (the text parser)
+//! and [`apply::reconcile`] (the additive diff planner) are built and tested in
+//! every build; only the thin `nmcli`-spawning wrappers carry the gate. This is the
+//! "pure layer always built, effectful path gated" precedent the relay module
+//! established.
 
 pub mod adopt;
+pub mod apply;
 pub mod model;

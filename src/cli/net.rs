@@ -34,12 +34,41 @@ pub(crate) enum NetCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Render a desired model to the host: compute the additive nmcli reconcile
+    /// plan against the live host and (with `--apply`) execute it. **Dry-run is the
+    /// default** — without `--apply` it prints the plan and mutates NOTHING. Never
+    /// flushes connections it does not own (ADR-0003 §3). Needs `--features hostnet`.
+    Apply {
+        /// Path to the desired model (a netplan-v2-superset YAML file, as emitted by
+        /// `lane net adopt`). This is the P1 input surface; `--host` profiles are P2.
+        #[arg(long)]
+        profile: String,
+        /// Execute the plan (mutate the host). Omit for the safe dry-run default,
+        /// which prints the plan and changes nothing. Mutually exclusive with
+        /// `--dry-run`.
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Print the plan and mutate nothing (the default behavior; accepted
+        /// explicitly so the safe intent can be stated). Mutually exclusive with
+        /// `--apply`.
+        #[arg(long)]
+        dry_run: bool,
+        /// Print the plan as JSON instead of the `nmcli …` line form.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Run the `lane net` subcommand.
 pub async fn run(args: &NetArgs) -> Result<()> {
     match &args.command {
         NetCommand::Adopt { connection, json } => adopt(connection.as_deref(), *json),
+        NetCommand::Apply {
+            profile,
+            apply,
+            dry_run: _,
+            json,
+        } => apply_cmd(profile, *apply, *json),
     }
 }
 
@@ -80,6 +109,71 @@ fn adopt(_connection: Option<&str>, _json: bool) -> Result<()> {
     )
 }
 
+/// Render a desired profile to the host plane. Computes the additive reconcile plan
+/// against the live host; dry-run (default) prints it, `--apply` executes it
+/// fail-closed. Feature build.
+#[cfg(feature = "hostnet")]
+fn apply_cmd(profile: &str, apply: bool, json: bool) -> Result<()> {
+    use anyhow::Context;
+
+    // Desired model: parse the committed profile file (P1 input surface).
+    let raw = std::fs::read_to_string(profile)
+        .with_context(|| format!("reading desired profile {profile:?}"))?;
+    let desired: crate::net::model::NetworkDocument = serde_yaml::from_str(&raw)
+        .with_context(|| format!("parsing desired profile {profile:?}"))?;
+
+    // Current host state: reuse the P0b adopter (read-only, sanitizing).
+    let current = crate::net::adopt::adopt_all().context("reading current host network plane")?;
+
+    // The additive reconcile plan (pure).
+    let plan = crate::net::apply::reconcile(&desired, &current);
+
+    if apply {
+        // Mutating path: execute op-by-op, fail-closed (stop on first error).
+        crate::net::apply::apply_plan(&plan).context("applying reconcile plan")?;
+        print_plan(&plan, json);
+        return Ok(());
+    }
+
+    // Dry-run (default): print the plan, mutate nothing.
+    print_plan(&plan, json);
+    Ok(())
+}
+
+/// Feature-off `apply`: fails closed (mirrors `adopt` without `hostnet`).
+#[cfg(not(feature = "hostnet"))]
+fn apply_cmd(_profile: &str, _apply: bool, _json: bool) -> Result<()> {
+    anyhow::bail!(
+        "the host network-plane renderer is not enabled in this build; rebuild with \
+         `--features hostnet` (ADR-0003)"
+    )
+}
+
+/// Print the reconcile plan as `nmcli …` lines (default) or JSON to stdout. The
+/// plan is the machine-consumable artifact, so it is printed raw to stdout (not
+/// through the styled term layer). Secret material is never present.
+#[cfg(feature = "hostnet")]
+fn print_plan(plan: &crate::net::apply::ReconcilePlan, json: bool) {
+    if json {
+        let ops: Vec<serde_json::Value> = plan
+            .ops
+            .iter()
+            .map(|op| {
+                serde_json::json!({
+                    "nmcli": op.to_argv(),
+                })
+            })
+            .collect();
+        let doc = serde_json::json!({ "ops": ops });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_string())
+        );
+    } else {
+        print!("{}", plan.render_text());
+    }
+}
+
 /// Print the adopted document as YAML (default) or JSON to stdout.
 #[cfg(feature = "hostnet")]
 fn print_doc(doc: &crate::net::model::NetworkDocument, json: bool) -> Result<()> {
@@ -116,6 +210,37 @@ mod tests {
                 assert_eq!(connection.as_deref(), Some("cognitum-seed-linklocal"));
                 assert!(json);
             }
+            other => panic!("expected Adopt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_args_parse() {
+        let args = NetArgs {
+            command: NetCommand::Apply {
+                profile: "/tmp/desired.yaml".into(),
+                apply: false,
+                dry_run: false,
+                json: false,
+            },
+        };
+        match &args.command {
+            NetCommand::Apply {
+                profile,
+                apply,
+                dry_run,
+                json,
+            } => {
+                assert_eq!(profile, "/tmp/desired.yaml");
+                // Dry-run is the safe default (no mutation without an explicit flag).
+                assert!(
+                    !apply,
+                    "apply must default to false (dry-run is the default)"
+                );
+                assert!(!dry_run);
+                assert!(!json);
+            }
+            other => panic!("expected Apply, got {other:?}"),
         }
     }
 
@@ -123,6 +248,16 @@ mod tests {
     #[test]
     fn adopt_fails_closed_without_feature() {
         let err = adopt(None, false).unwrap_err();
+        assert!(
+            err.to_string().contains("--features hostnet"),
+            "must point the user at the feature flag, got: {err}"
+        );
+    }
+
+    #[cfg(not(feature = "hostnet"))]
+    #[test]
+    fn apply_fails_closed_without_feature() {
+        let err = apply_cmd("/tmp/desired.yaml", false, false).unwrap_err();
         assert!(
             err.to_string().contains("--features hostnet"),
             "must point the user at the feature flag, got: {err}"
