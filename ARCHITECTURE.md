@@ -777,13 +777,49 @@ inferred from the always-masked value, so OWE/open APs carry **no** ref. **Passt
 affirmative host intent (NM `0`/`0x0`/`false`/`default`/`-1`/`auto` sentinels are dropped) so diffs stay
 meaningful; `yes`/`no` normalize to `true`/`false` to match the adopted snapshot shape.
 
-### src/cli/net  (`lane net adopt`)
+### src/net/apply  (P1 — additive reconcile planner always compiled; `nmcli` apply behind `hostnet`)
+
+```rust
+// PURE (no host access) — built & unit-tested in every build:
+pub const SECRET_PLACEHOLDER: &str = "<resolved-at-apply>";   // a SecretRef renders to this in the plan, never material
+pub enum NmcliOp { Add{con_name,nm_type,ifname,sets} | Modify{con_name,sets} }   // NO delete/flush variant (additive-only)
+pub fn NmcliOp::to_argv(&self) -> Vec<String>;   pub fn NmcliOp::con_name(&self) -> &str;   // argv vectors only, no shell
+pub struct ReconcilePlan { pub ops: Vec<NmcliOp> }   pub fn is_empty(&self) -> bool;   pub fn render_text(&self) -> String;
+pub fn reconcile(desired: &NetworkDocument, current: &NetworkDocument) -> ReconcilePlan;   // the additive diff — heart of P1
+pub fn is_runtime_bridge(name: &str) -> bool;    // lo/docker0/virbr*/br-*/veth* excluded from the reconcile-current view
+
+// LIVE nmcli apply — #[cfg(feature = "hostnet")] only:
+pub fn apply_plan(plan: &ReconcilePlan) -> Result<()>;   // exec each op via osutil::run_privileged("nmcli", argv), fail-closed
+```
+
+**Additive-only (ADR §3, SAFETY-CRITICAL).** For each DESIRED unit, `reconcile` emits an `Add` (no current
+match) or a `Modify` of only the differing properties. It **never** emits a delete/flush — `NmcliOp` has no
+such variant — so connections present in `current` but absent from `desired` are left completely untouched
+(deletion of owned-but-removed units is out of scope for P1). Matching is by the **stable key**
+(`networkmanager.name`, else `match.name`), **never** the regenerated NM UUID. **Idempotence:** before
+diffing, each unit is projected to a canonical nmcli property map and NM **bookkeeping** passthrough keys
+(`ipv4.may-fail`/`ipv6.may-fail`/`ipv4.dhcp-send-hostname-deprecated`/`ipv6.dhcp-send-hostname-deprecated`)
+are normalized out, so re-applying an unchanged unit yields an EMPTY plan; semantically-significant keys
+(`ipv4.never-default`, `ipv6.method`, addresses, routes, `*.key-mgmt`, dhcp) still diff (lossless bias — a
+key is normalized only when justified as an NM default). **Runtime exclusion:** `is_runtime_bridge` keeps the
+reconcile from ever planning against Docker/libvirt bridges or `veth` pairs. **Secrets:** a `SecretRef`
+renders the credential property as `SECRET_PLACEHOLDER`; the real value is resolved at apply time from
+`secretd` (env-ctl) — never in the plan text. `apply_plan` is **fail-closed**: it stops on the first nmcli
+error and refuses to execute a plan that still carries an unresolved placeholder.
+
+### src/cli/net  (`lane net adopt` / `lane net apply`)
 
 `lane net adopt [--connection <name>] [--json]` reads the host plane and prints the model (YAML default,
-JSON with `--json`) to stdout — **read-only, no host mutation**. The command always parses (`lane net
---help` works in the default build); the live read is gated behind `hostnet` and fails closed without it
-("rebuild with `--features hostnet`"), mirroring `lane web`/`lane relay`. `lane net apply` (P1 renderer)
-is intentionally **not** present yet (no dead command).
+JSON with `--json`) to stdout — **read-only, no host mutation**.
+
+`lane net apply --profile <path> [--dry-run|--apply] [--json]` reads the desired model from `<path>` (a
+netplan-v2-superset YAML, as emitted by `adopt`; `--host` profiles are P2), adopts the current host (reusing
+`adopt_all`), computes the additive `reconcile` plan, and prints it (`nmcli …` lines, or JSON ops with
+`--json`). **`--dry-run` is the default** — `--apply` is the explicit opt-in that executes the plan via
+`apply_plan`; the two flags are mutually exclusive so a merged binary never mutates by accident.
+
+The command always parses (`lane net --help` works in the default build); the live read/apply is gated behind
+`hostnet` and fails closed without it ("rebuild with `--features hostnet`"), mirroring `lane web`/`lane relay`.
 
 ```toml
 # Cargo.toml — gates only the live nmcli reader + CLI path; pulls in NO new dependency

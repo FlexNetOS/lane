@@ -91,7 +91,7 @@ enum Commands {
     Web(web::WebArgs),
     /// Cross-machine relay: trusted fleet mesh + governed streams (needs --features relay)
     Relay(relay::RelayArgs),
-    /// Adopt the host network plane into lane's model (read-only; needs --features hostnet)
+    /// Adopt & apply the host network plane (adopt: read-only; apply: dry-run by default; needs --features hostnet)
     Net(net::NetArgs),
     /// Diagnose setup issues
     Doctor(DoctorArgs),
