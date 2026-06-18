@@ -4,8 +4,15 @@ loop: lane-loop
 branch: main (features shipped via per-feature worktrees+PRs; auto-merge on green)
 worktree: (this session ran from ~/Desktop/meta/lane + per-item worktrees under ../.worktrees/)
 cycle_budget: 3            # completed cycles per session before handoff (override via RALPH_BUDGET)
-cycles_this_session: 3     # multi-hop, webpolicy, lane web seam
-cycles_total: 17           # carried across sessions (slim parity + --json + Phase-7 + Phase-8 seam)
+cycles_this_session: 1     # W2/P0a (net model + ADR deconfliction lock)
+cycles_total: 18           # carried across sessions (slim parity + --json + Phase-7 + Phase-8 + W2/P0a)
+in_flight:
+  epic: Phase 8 (W2) host network plane — adopt-consume + Rust-native portability (ADR-0003)
+  done_this_session:
+    - P0a — net::model lossless netplan-v2 superset + round-trip committed snapshot → PR #56 (auto-merge armed; 415 tests green, verified + guard-clean). Includes ADR-0003 §Deconfliction lock.
+  next_item: P0b — `lane net adopt` live host reader (nmcli/`/etc/netplan`/ip → model) behind `hostnet` feature (default-off), sanitizing. Round-trip the live box.
+  deconflict: LOCKED — by LAYER not device (network-control=off-host fabric; lane=single writer to on-host netplan-NM plane). weave #120 proposal → #121 ACK; network-control PR #25. P1 unblocked.
+  gates_ahead: P1 (lane net apply) host-mutating → feature-gated + dry-run-default + fail-closed; verify via REAL nmcli/iptables ground truth, NEVER `lane doctor` (FlexNetOS/lane#5). Human wall (sudo/reboot durability test) → write NEEDS-HUMAN, don't fake green.
 last_item: PHASE A1 COMPLETE (obscura estate integration) — followed the "next 5 tasks" session.
         Merged: obscura #2 (RED→GREEN baseline 271/0), #3 (custom-CA trust), #4 (fork identity→FlexNetOS);
         lane #42 (lane-web seam reconciled to obscura's real CLI); network_hub #1 (obscura registered +
