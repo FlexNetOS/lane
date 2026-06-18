@@ -4,15 +4,20 @@ loop: lane-loop
 branch: main (features shipped via per-feature worktrees+PRs; auto-merge on green)
 worktree: (this session ran from ~/Desktop/meta/lane + per-item worktrees under ../.worktrees/)
 cycle_budget: 3            # completed cycles per session before handoff (override via RALPH_BUDGET)
-cycles_this_session: 1     # W2/P0a (net model + ADR deconfliction lock)
-cycles_total: 18           # carried across sessions (slim parity + --json + Phase-7 + Phase-8 + W2/P0a)
+cycles_this_session: 2     # W2/P0a (net model + ADR deconfliction lock), W2/P0b (lane net adopt)
+cycles_total: 19           # carried across sessions (slim parity + --json + Phase-7 + Phase-8 + W2/P0a+P0b)
+status: ACTIVE — W2 P0 "Adopt" milestone COMPLETE (read-only half of ADR-0003). Handing off at the
+        P0→P1 boundary: P1 is host-mutating + needs sudo/reboot (human wall) and deserves fresh context
+        for the safety-critical additive-reconcile design. Truth on disk; resume at P1a.
 in_flight:
   epic: Phase 8 (W2) host network plane — adopt-consume + Rust-native portability (ADR-0003)
   done_this_session:
-    - P0a — net::model lossless netplan-v2 superset + round-trip committed snapshot → PR #56 (auto-merge armed; 415 tests green, verified + guard-clean). Includes ADR-0003 §Deconfliction lock.
-  next_item: P0b — `lane net adopt` live host reader (nmcli/`/etc/netplan`/ip → model) behind `hostnet` feature (default-off), sanitizing. Round-trip the live box.
-  deconflict: LOCKED — by LAYER not device (network-control=off-host fabric; lane=single writer to on-host netplan-NM plane). weave #120 proposal → #121 ACK; network-control PR #25. P1 unblocked.
-  gates_ahead: P1 (lane net apply) host-mutating → feature-gated + dry-run-default + fail-closed; verify via REAL nmcli/iptables ground truth, NEVER `lane doctor` (FlexNetOS/lane#5). Human wall (sudo/reboot durability test) → write NEEDS-HUMAN, don't fake green.
+    - P0a — net::model lossless netplan-v2 superset + round-trip committed snapshot → PR #56 MERGED. ADR-0003 §Deconfliction lock included.
+    - P0b — `lane net adopt` live host reader (nmcli-sourced, hostnet feature, secret-safe) → PR #57 (auto-merge armed; 425 default + 13 hostnet tests green; verified LIVE on box + guard-clean).
+  next_item: P1a — `lane net apply` render engine (model → apply-plan + ADDITIVE reconcile diff + --dry-run DEFAULT; no host mutation; pure+fixture-tested). MUST land 2 P0b pre-decisions: runtime-bridge exclusion + passthrough normalization (see backlog). Then P1b = live apply + cognitum-seed reboot-durability (HUMAN WALL: sudo+reboot → NEEDS-HUMAN).
+  deconflict: LOCKED — by LAYER not device (network-control=off-host fabric; lane=single writer to on-host netplan-NM plane). weave #120 proposal → #121 ACK; network-control PR #25. ADR §Deconfliction merged in #56. P1 unblocked.
+  gates_ahead: P1 host-mutating → feature-gated + dry-run-default + additive (NEVER flush unowned addrs) + fail-closed; verify via REAL nmcli/ip/iptables ground truth, NEVER `lane doctor` (FlexNetOS/lane#5). P1b reboot/sudo = human wall → write NEEDS-HUMAN, don't fake green.
+  resume_note: P0a is MERGED to main; P0b PR #57 may merge before next session — `git fetch && gh pr view 57` then branch P1a from origin/main (NOT stacked). Build features: `cargo test --features hostnet`.
 last_item: PHASE A1 COMPLETE (obscura estate integration) — followed the "next 5 tasks" session.
         Merged: obscura #2 (RED→GREEN baseline 271/0), #3 (custom-CA trust), #4 (fork identity→FlexNetOS);
         lane #42 (lane-web seam reconciled to obscura's real CLI); network_hub #1 (obscura registered +
