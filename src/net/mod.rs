@@ -16,6 +16,12 @@
 //!   unchanged. The model carries no host access, so it compiles and its
 //!   round-trip tests run in the default build (no feature gate), mirroring how
 //!   [`crate::relay::allowlist`] keeps its pure security core always-built.
+//! - [`profile`] (P2) — in-repo per-host profiles: the pure `hosts/<name>.yaml`
+//!   read/write/list + runtime-unit strip is always built; only the live-host
+//!   *save* (which adopts) is gated. The "meta is portable" payoff.
+//! - [`networkd`] (P2) — the systemd-networkd render backend for non-NM boxes: the
+//!   pure model → `.network`/`.netdev`/`.link` render is always built and
+//!   fixture-tested; only the file-writing apply path is gated.
 //!
 //! # What is feature-gated
 //!
@@ -31,3 +37,5 @@
 pub mod adopt;
 pub mod apply;
 pub mod model;
+pub mod networkd;
+pub mod profile;

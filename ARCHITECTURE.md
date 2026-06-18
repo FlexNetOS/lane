@@ -807,23 +807,90 @@ renders the credential property as `SECRET_PLACEHOLDER`; the real value is resol
 `secretd` (env-ctl) — never in the plan text. `apply_plan` is **fail-closed**: it stops on the first nmcli
 error and refuses to execute a plan that still carries an unresolved placeholder.
 
-### src/cli/net  (`lane net adopt` / `lane net apply`)
+### src/net/profile  (P2 — in-repo per-host profiles; pure I/O always built, live `save` behind `hostnet`)
+
+```rust
+// PURE (filesystem/model only) — built & unit-tested in every build:
+pub const DEFAULT_PROFILES_DIR: &str = "hosts";                       // committed profile dir, repo-relative
+pub fn profile_path(dir: impl AsRef<Path>, name: &str) -> PathBuf;    // <dir>/<name>.yaml
+pub fn write_profile(dir, name, doc: &NetworkDocument) -> Result<PathBuf>;   // serde_yaml; a REPO write, not host mutation
+pub fn read_profile(dir, name) -> Result<NetworkDocument>;           // round-trip counterpart
+// read_profile/write_profile validate `name` is a single plain filename component (no `/`, no `..`) →
+// reject `../escape` so a CLI-supplied `--host`/`save`/`show` name can never escape the profiles dir.
+pub fn list_profiles(dir) -> Result<Vec<String>>;                    // <name>.yaml → <name>, sorted; missing dir ⇒ empty (not error)
+pub fn strip_runtime_units(doc: &NetworkDocument) -> NetworkDocument; // drops docker0/virbr0/br-*/veth*/lo (apply::is_runtime_unit)
+
+// LIVE host capture — #[cfg(feature = "hostnet")] only:
+pub fn save_profile(dir, name) -> Result<PathBuf>;   // adopt_all → strip_runtime_units → write_profile
+pub fn live_hostname() -> Result<String>;            // default profile name via libc::gethostname(2)
+```
+
+**The portability payoff (ADR §4).** A profile is a committed `hosts/<name>.yaml` capturing a box's **durable
+HOST plane only** so a fresh box reproduces it with `apply --host <name>`. `save_profile` strips runtime-managed
+interfaces (`apply::is_runtime_unit`, made `pub(crate)` for reuse): `docker0`/`virbr0`/`br-*`/`veth*`/`lo` are
+recreated by Docker/libvirt on the new box, never by lane, so committing them would be box-specific noise.
+Because the strip is the **same** exclusion the reconcile applies, a saved profile re-applied via `--host` is
+idempotent against the host it was captured from (the reproduce loop). A profile write is a **repo write
+(safe)**, never a host mutation; secrets stay `SecretRef`s (the model is safe to commit). `--profiles-dir`
+overrides the base dir so tests/callers never touch the real repo `hosts/`.
+
+### src/net/networkd  (P2 — systemd-networkd render backend; pure render always built, file write behind `hostnet`)
+
+```rust
+// PURE (model → files, no host access) — built & fixture-tested in every build:
+pub const WIFI_SECRET_MARKER: &str;                          // a credential-bearing wifi unit renders only this marker
+pub struct NetworkdFile { pub path: String, pub contents: String }   // a rendered /etc/systemd/network/ drop-in
+pub fn render_networkd(doc: &NetworkDocument) -> Vec<NetworkdFile>;  // the heart of the backend (mirrors apply::reconcile)
+pub fn render_files_text(files: &[NetworkdFile]) -> String;          // dry-run report: `--- <path> ---` banner + contents
+
+// LIVE file write — #[cfg(feature = "hostnet")] only:
+pub fn write_networkd_files(files: &[NetworkdFile]) -> Result<()>;   // each via system::write_file_elevated, fail-closed
+```
+
+**For non-NM boxes (ADR §4 "networkd renderer").** A second apply backend: where `apply` emits `nmcli` ops,
+`networkd` renders the model to `/etc/systemd/network/` drop-ins — a `.network` (`[Match]`+`[Network]`/
+`Address`/`[Route]`/DHCP) per unit; a `.netdev`+`.network` (+per-member `.network`) for a bridge; a `.link`
+(`[Link] Name=`) when a unit `set-name`s. **No-downgrade map** (the cognitum-seed snapshot renders faithfully):
+`match.name|mac`→`[Match] Name=`/`MACAddress=`; `addresses`→`Address=`; `dhcp4/6`→`DHCP=ipv4|ipv6|yes|no`;
+`ipv4.never-default: "true"`→a documented marker (+`[DHCPv4] UseGateway=no` when DHCP is on) so the link never
+provides the default route; `ipv6.method: link-local`→`LinkLocalAddressing=ipv6`+`IPv6AcceptRA=no`;
+`nameservers`→`[Network] DNS=`(one per address)+`Domains=`(space-joined search); `wakeonlan: true`→a `.link`'s
+`[Link] WakeOnLan=magic` (the only place networkd carries WoL — a WoL-only unit still emits the `.link`);
+`routes`→`[Route]` (`Destination=`/`Gateway=`/`Metric=`/`GatewayOnLink=yes` for `on-link: true`). **No silent
+drops (two-layer guard):** (1) a passthrough key with no first-class handling is carried as a `#`-commented
+**gap** (`push_passthrough_gaps`); (2) a *first-class model field* the renderer does not emit is surfaced as a
+`# unmapped (porter task): <field>` gap by a structural audit (`push_first_class_gaps`, fed by the `audit_*`
+helpers, which exhaustively destructure each unit type — no `..` — so a new model field is a **compile error**
+until it is rendered or gapped). A field is never silently dropped. **Secrets:** networkd carries no 802.11 PSK
+(wpa_supplicant does), so a `SecretRef`-bearing wifi
+unit renders only `WIFI_SECRET_MARKER` — no material, not even the `secretd` ref key, ever in the output. The
+mutating write is gated, fail-closed, and—like P1's nmcli apply—its live execution + `networkctl reload` is the
+human wall.
+
+### src/cli/net  (`lane net adopt` / `lane net apply` / `lane net profile`)
 
 `lane net adopt [--connection <name>] [--json]` reads the host plane and prints the model (YAML default,
 JSON with `--json`) to stdout — **read-only, no host mutation**.
 
-`lane net apply --profile <path> [--dry-run|--apply] [--json]` reads the desired model from `<path>` (a
-netplan-v2-superset YAML, as emitted by `adopt`; `--host` profiles are P2), adopts the current host (reusing
-`adopt_all`), computes the additive `reconcile` plan, and prints it (`nmcli …` lines, or JSON ops with
-`--json`). **`--dry-run` is the default** — `--apply` is the explicit opt-in that executes the plan via
-`apply_plan`; the two flags are mutually exclusive so a merged binary never mutates by accident.
+`lane net apply (--profile <path> | --host <name>) [--profiles-dir <dir>] [--renderer networkmanager|networkd]
+[--dry-run|--apply] [--json]` resolves the desired model from a `--profile` file (P1) **or** a committed
+`--host <name>` profile (P2; `--profile`/`--host` are clap-`conflicts_with` mutually exclusive). The backend is
+the `--renderer` override else the model's own `renderer`: `networkmanager` adopts the current host and prints
+the additive `reconcile` plan (`nmcli …` lines / JSON ops); `networkd` prints the rendered file set (path +
+contents / JSON). **`--dry-run` is the default** — `--apply` is the explicit opt-in (mutually exclusive) that
+executes via `apply_plan` (nmcli) or `write_networkd_files` (networkd).
 
-The command always parses (`lane net --help` works in the default build); the live read/apply is gated behind
-`hostnet` and fails closed without it ("rebuild with `--features hostnet`"), mirroring `lane web`/`lane relay`.
+`lane net profile save [<name>] [--profiles-dir <dir>]` adopts the live host, strips runtime units, and writes
+`hosts/<name>.yaml` (name defaults to the live hostname) — a **repo write, not a host mutation**.
+`lane net profile list [--profiles-dir <dir>]` / `show <name>` are pure filesystem reads available in **every**
+build (only `save` adopts and so takes the gate).
+
+The command always parses (`lane net --help` works in the default build); the live read/apply/save is gated
+behind `hostnet` and fails closed without it ("rebuild with `--features hostnet`"), mirroring `lane web`/`lane relay`.
 
 ```toml
-# Cargo.toml — gates only the live nmcli reader + CLI path; pulls in NO new dependency
-# (uses std::process + the already-present serde_yaml), like obscura/relay:
+# Cargo.toml — gates only the live nmcli reader + CLI live paths; pulls in NO new dependency
+# (uses std::process + the already-present serde_yaml + the existing libc dep), like obscura/relay:
 hostnet = []
 ```
 

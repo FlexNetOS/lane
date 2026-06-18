@@ -521,7 +521,11 @@ pub fn reconcile(desired: &NetworkDocument, current: &NetworkDocument) -> Reconc
 /// [`is_runtime_bridge`] (Docker/libvirt bridges, `veth` pairs, loopback). Such units
 /// are excluded from BOTH the desired and current sides of the reconcile so lane never
 /// plans a change against an interface another runtime owns.
-fn is_runtime_unit(key: &str, ifname: Option<&str>) -> bool {
+///
+/// `pub(crate)` so the P2 profile writer ([`crate::net::profile`]) can strip the same
+/// runtime-managed units out of a committed per-host profile (docker0/virbr0/br-*/veth*
+/// are recreated by Docker/libvirt on a fresh box, never by lane).
+pub(crate) fn is_runtime_unit(key: &str, ifname: Option<&str>) -> bool {
     is_runtime_bridge(key) || ifname.is_some_and(is_runtime_bridge)
 }
 
