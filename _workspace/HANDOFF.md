@@ -5,10 +5,10 @@ schema: lane-loop/packet/v1
 packet_id: w2-p0p1p2-shipped-2026-06-17
 session_id: w2-network-plane-2026-06-17
 written_utc: 2026-06-18T01:55:00Z
-backlog_status: ACTIVE — W2 P0+P1a+P2 shipped; only non-autonomous work remains (P1b human wall, P3 cross-repo)
+backlog_status: ACTIVE — W2 P0+P1a+P2 shipped + landed on main. NEXT SESSION = FULL VERIFICATION AUDIT (see _workspace/AUDIT-KICKOFF.md). Non-autonomous remainder: P1b human wall, P3 cross-repo.
 in_flight:
   epic: Phase 8 (W2) host network plane — adopt-consume + Rust-native portability (ADR-0003)
-  item: none autonomous — P1b (human wall) + P3 (cross-repo seam) remain
+  item: QUEUED — FULL VERIFICATION AUDIT of the shipped W2 work (adversarial; verify all code + tasks done properly; see _workspace/AUDIT-KICKOFF.md). Then P1b (human wall) + P3 (cross-repo seam) remain.
   pipeline_stage: milestone-complete (adopt + render + portability all landed/arming)
 branch: main (per-feature worktrees+PRs; auto-merge on green)
 worktree: ../.worktrees/<item>/lane per item
@@ -31,7 +31,7 @@ decisions:
 blockers:
   - "P1b — live MUTATING `lane net apply --apply` + cognitum-seed durability across carrier-bounce + REBOOT. The --apply path is shipped + fail-closed; its EXECUTION needs sudo + a reboot = HUMAN WALL. When run: NEEDS-HUMAN, verify via REAL nmcli/ip/iptables, NEVER `lane doctor` (FlexNetOS/lane#5). Do NOT fake green."
   - "P3 — env-ctl seam is CROSS-REPO + staged. Kicked off via weave #127 (parity evidence + staged-migration proposal). Awaiting env-ctl's choice of seam (committed host-profile vs `lane net apply` call at unlock). Resume when env-ctl replies; keep env-ctl PR #115 working until byte-parity proven."
-next_command: "git fetch && gh pr list --state open  # confirm #59/#60 merged; then watch weave inbox for env-ctl reply to #127 (P3). P1b is human-driven (sudo+reboot)."
+next_command: "Run the FULL VERIFICATION AUDIT in _workspace/AUDIT-KICKOFF.md (fresh worktree off main; drive verification-engineer + rust-native-guardian; write _workspace/AUDIT-REPORT-<date>.md). Then: P3 = watch weave inbox for env-ctl reply to #127; P1b = human-driven (sudo+reboot)."
 open_prs:
   - "#59 lane-net-apply — P1 apply (auto-merge armed)"
   - "#60 lane-net-portability — P2 profiles+networkd (auto-merge armed; stacks on #59)"
