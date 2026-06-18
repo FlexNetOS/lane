@@ -80,6 +80,26 @@ lane gains a **host network-plane** capability (feature-gated, default-off, like
   dry-run-by-default, and never flush addresses it does not own. Default-off feature gate until proven.
 - **−** Cross-repo coordination (lane ↔ env-ctl) for the P3 seam; staged to avoid USB-unlock regression.
 
+## Deconfliction with `network-control` (boundary lock)
+The `network-control` repo (`netctl`/`netengine`) is doing concurrent host-net work
+(`netengine/src/host.rs` status, `bond.rs` "netplan LAG planner for the 2×10G uplink",
+`slice-hostnet-write-rtnetlink` live link/addr/route via rtnetlink). To ensure the two workstreams
+**never both claim the host plane**, ownership is split **by LAYER, not by device** (agreed via weave
+2026-06-17, lane→network-control msg #120, network-control ACK #121; matching note on
+`network-control` PR #25):
+
+- **`network-control`/`netctl` owns the OFF-host fabric:** the Omada SDN controller, switches, access
+  points, gateway — VLANs, SSIDs, VPN policy, switch ports, and switch-side LAG.
+- **lane owns the ON-host OS network plane:** host NICs, addresses, routes, link-local special cases,
+  and the **netplan→NM rendering** (this ADR) — lane is the **single writer** to `/etc/netplan` + NM —
+  plus lane's existing relay/web egress governance.
+- **The same physical link splits cleanly:** for the 2×10G uplink, the *switch-side* port/VLAN/LAG
+  config is `network-control`'s; the *host-side* bond member, address, route, and netplan-NM renderer
+  is lane's. `network-control` may express the desired host-side bonding *intent*, but it feeds that
+  unit into lane's model rather than writing `/etc/netplan` directly (the same single-writer seam lane
+  uses with env-ctl's `cognitum-seed-net` in P3). No collision exists today; this only locks the
+  boundary so it stays that way.
+
 ## No-downgrade contract
 Adoption is **lossless**: every observable in the host snapshot (address, route, match, never-default,
 autoconnect, wifi key-mgmt, link-local mode) MUST round-trip adopt→render unchanged before P3 retires

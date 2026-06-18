@@ -135,7 +135,10 @@ backlog; Phase 8 is owner-gated strategic work.
   - ADR: [`docs/adr/ADR-0003-host-network-adopt-consume.md`](../docs/adr/ADR-0003-host-network-adopt-consume.md) (Accepted-design; owner blanket-approved)
   - Adoption input: [`docs/adopt/host-nm-snapshot-2026-06-17.md`](../docs/adopt/host-nm-snapshot-2026-06-17.md) (sanitized; netplan=SoT, NM=renderer)
   - **P0 Adopt (read-only):** serde model (superset of netplan v2) + `lane net adopt` (live host → model) + round-trip the snapshot. No host mutation.
-  - **P1 Render:** `lane net apply` for the netplan-NM renderer; additive reconcile (never flush unowned addrs); prove on the `cognitum-seed` link-local case (bounce/reboot durable, never-default).
+    - [x] **P0a** — `net::model` (always-compiled lossless netplan-v2 superset) + round-trip the committed snapshot. Shipped: PR #56 (415 tests green, verified + guard-clean). Includes ADR-0003 deconfliction lock (weave #120/#121; network-control PR #25).
+    - [ ] **P0b** — `lane net adopt` live host reader (`nmcli`/`/etc/netplan`/`ip` → model), `hostnet` feature-gate (default-off), sanitizing (secrets→`SecretRef`, never written). Round-trips the live box's NM/netplan into the model.
+  - **DECONFLICT: LOCKED** — boundary with `network-control` is by LAYER not device (network-control=off-host fabric Omada/switch/AP/VLAN/VPN; lane=on-host netplan-NM plane, single writer). ADR-0003 §Deconfliction. P1 unblocked.
+  - **P1 Render:** `lane net apply` for the netplan-NM renderer; additive reconcile (never flush unowned addrs); prove on the `cognitum-seed` link-local case (bounce/reboot durable, never-default). Feature-gated, dry-run-default, fail-closed. *(host-mutating — needs the box; verify with real nmcli/iptables ground truth, not `lane doctor`.)*
   - **P2 Portability:** in-repo per-host profile (`--host <name>` reproduces a box); networkd renderer for non-NM boxes.
   - **P3 env-ctl seam:** migrate env-ctl `cognitum-seed-net` rendering to a lane network unit (no-downgrade, staged; keep env-ctl PR #115 working until parity proven). Coordinate via weave.
   - **No-downgrade contract:** adoption is LOSSLESS — every address/route/match/never-default/autoconnect/wifi-key-mgmt/link-local mode round-trips adopt→render unchanged before P3 retires any path. Secrets stay in `secretd`, never inline.

@@ -13,6 +13,7 @@ pub mod doctor;
 pub mod httperr;
 pub mod inspect;
 pub mod log;
+pub mod net;
 pub mod osutil;
 pub mod project;
 pub mod protocol;
