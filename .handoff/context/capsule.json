@@ -1,10 +1,10 @@
 {
   "schema": "handoff.context_capsule.v1",
   "project_name": "lane",
-  "role": "Rust CLI+daemon that maps custom local dev domains (myapp.test) to localhost ports via a TLS-terminating reverse proxy with locally trusted certs, plus a tunnel module for one-command public sharing. src/ has real proxy/cert/daemon/tunnel/doctor/setup subsystems behind a lib+bin crate.",
+  "role": "Rust CLI+daemon that maps custom local dev domains (myapp.test) to localhost ports via a TLS-terminating reverse proxy with locally trusted certs, plus a tunnel module for one-command public sharing. src/ has real proxy/cert/daemon/tunnel/doctor/setup subsystems behind a lib+bin crate. Now also owns the HOST NETWORK PLANE (ADR-0003): src/net = adopt (read-only nmcli reader)/apply (additive netplan-NM + systemd-networkd renderer, dry-run-default)/profile (per-host portability), feature-gated `hostnet`; plus relay (iroh fleet mesh) + web (governed egress) seams.",
   "plane": "network",
   "tier": "B",
   "northstar": "lane owns network engineering/control; obscura upgrades it with stealth agent web access.",
-  "next_command": "W2: lane+obscura seam ADR. Loop TERMINAL DONE 2026-06-05 (legitimate; recorded)",
-  "source": "ARCHITECTURE-TRUTH.md census 2026-06-12"
+  "next_command": "W2 host network plane (ADR-0003) SHIPPED on main: P0a model #56, P0b adopt #57, P1 apply #59, P2 profiles+networkd #60 (458 default + 455 hostnet tests green). REMAINING (non-autonomous): P1b = live-mutating `lane net apply --apply` + cognitum-seed reboot/carrier-bounce durability (HUMAN WALL: sudo+reboot, env-ctl's live secrets NIC); P3 = env-ctl cognitum-seed-net seam migration (CROSS-REPO, staged, kicked off weave #127, awaiting env-ctl). network-control boundary locked by layer (ADR-0003 §Deconfliction). lane-loop continuity: _workspace/HANDOFF.md.",
+  "source": "lane-loop W2 host-network-plane session 2026-06-17 (main @ 96c86d8); supersedes ARCHITECTURE-TRUTH.md census 2026-06-12"
 }
