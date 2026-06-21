@@ -43,8 +43,11 @@ httparse = "1"
 # one-rustls-ring invariant.
 instant-acme = { version = "0.7", optional = true }
 
-# TLS + certificates
-tokio-rustls = "0.26"
+# TLS + certificates.
+# tokio-rustls DEFAULT features include `aws_lc_rs` — pin to ring (matches the rustls dep
+# below) or it drags reqwest/tokio-rustls onto the banned aws-lc-rs/aws-lc-sys C crates,
+# breaking the one-rustls-ring invariant and downstream no-C gates (e.g. network-control).
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
 rustls-pemfile = "2"
 rustls-pki-types = "1"
@@ -62,8 +65,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 
-# HTTP client + websocket tunnel
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "charset", "http2"] }
+# HTTP client + websocket tunnel.
+# reqwest TLS = rustls + the process-installed ring provider ONLY (no aws-lc / openssl).
+# Use the `*-no-provider` feature (NOT plain `rustls-tls`, which is provider-bearing and
+# drags in reqwest's default aws-lc-rs/aws-lc-sys C crates); lane installs the ring provider
+# itself via install_crypto_provider(). Preserves the one-rustls-ring invariant and keeps
+# lane consumable by downstreams (e.g. FlexNetOS/network-control) under their no-C gate.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots-no-provider", "stream", "charset", "http2"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 # Terminal UI

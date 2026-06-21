@@ -670,6 +670,10 @@ where
     let headers = parse_headers(head, head_end);
     let body = head.get(head_end..).unwrap_or(&[]).to_vec();
 
+    // reqwest's rustls TLS is provider-neutral (no built-in aws-lc); ensure the ring
+    // crypto provider is installed before building the client, or `.build()` panics
+    // ("No provider set"). Idempotent; mirrors build_mitm_acceptor.
+    crate::install_crypto_provider();
     let mut client_builder = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT);
     if let Some(up) = &state.upstream {
         match reqwest::Proxy::all(&up.url) {
@@ -812,6 +816,9 @@ async fn handle_http(
 
     // When chaining, build the client with the upstream proxy so allowed egress
     // routes THROUGH it (after governance); otherwise the client connects direct.
+    // Ensure the ring crypto provider is installed first (provider-neutral reqwest
+    // TLS panics on `.build()` otherwise). Idempotent; mirrors build_mitm_acceptor.
+    crate::install_crypto_provider();
     let mut client_builder = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT);
     if let Some(up) = &state.upstream {
         match reqwest::Proxy::all(&up.url) {
