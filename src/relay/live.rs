@@ -46,6 +46,16 @@ impl RelayEndpoint {
         Ok(RelayEndpoint { endpoint })
     }
 
+    /// Bind a relay endpoint with a **fresh, ephemeral, in-memory** identity (a
+    /// freshly generated [`SecretKey`] that is never persisted). For hermetic
+    /// two-endpoint tests that just need two distinct nodes on `RelayMode::Disabled`
+    /// — and lets a downstream crate spin up a throwaway endpoint **without naming
+    /// any iroh type** (no `SecretKey` in scope), keeping iroh transitive-only
+    /// behind this boundary.
+    pub async fn bind_ephemeral(relay_mode: RelayMode) -> Result<RelayEndpoint> {
+        RelayEndpoint::bind(SecretKey::generate(), relay_mode).await
+    }
+
     /// This node's stable NodeId (its fleet identity), as 64-char lowercase hex.
     pub fn node_id(&self) -> String {
         self.endpoint.id().to_string()
