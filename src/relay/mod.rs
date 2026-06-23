@@ -162,8 +162,8 @@ mod live;
 
 #[cfg(feature = "relay")]
 pub use live::{
-    connect_and_bridge, endpoint_addr_from_parts, relay_mode_from_config, run_accept_loop,
-    serve_local_bridge, AcceptConfig, RelayEndpoint,
+    connect_and_bridge, endpoint_addr_from_node_id, endpoint_addr_from_parts,
+    relay_mode_from_config, run_accept_loop, serve_local_bridge, AcceptConfig, RelayEndpoint,
 };
 
 #[cfg(test)]
