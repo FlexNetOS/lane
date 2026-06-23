@@ -166,6 +166,13 @@ pub use live::{
     relay_mode_from_config, run_accept_loop, serve_local_bridge, AcceptConfig, RelayEndpoint,
 };
 
+// Re-export iroh's DERP/NAT-traversal `RelayMode` so a downstream crate can select
+// `RelayMode::Default` (real fleet) / `RelayMode::Disabled` (hermetic) — and consume
+// `relay_mode_from_config` — **without naming any iroh type**, keeping iroh
+// transitive-only behind this boundary.
+#[cfg(feature = "relay")]
+pub use iroh::RelayMode;
+
 #[cfg(test)]
 mod tests {
     use super::*;
