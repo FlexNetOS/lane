@@ -46,6 +46,16 @@ impl RelayEndpoint {
         Ok(RelayEndpoint { endpoint })
     }
 
+    /// Bind a relay endpoint with a **fresh, ephemeral, in-memory** identity (a
+    /// freshly generated [`SecretKey`] that is never persisted). For hermetic
+    /// two-endpoint tests that just need two distinct nodes on `RelayMode::Disabled`
+    /// — and lets a downstream crate spin up a throwaway endpoint **without naming
+    /// any iroh type** (no `SecretKey` in scope), keeping iroh transitive-only
+    /// behind this boundary.
+    pub async fn bind_ephemeral(relay_mode: RelayMode) -> Result<RelayEndpoint> {
+        RelayEndpoint::bind(SecretKey::generate(), relay_mode).await
+    }
+
     /// This node's stable NodeId (its fleet identity), as 64-char lowercase hex.
     pub fn node_id(&self) -> String {
         self.endpoint.id().to_string()
@@ -56,6 +66,19 @@ impl RelayEndpoint {
     /// which is what hermetic direct addressing uses.
     pub fn endpoint_addr(&self) -> EndpointAddr {
         self.endpoint.addr()
+    }
+
+    /// This endpoint's [`EndpointAddr`] restricted to its bound **direct** IP
+    /// addresses (NodeId + direct socket addrs only, no relay url). This is the
+    /// hermetic, discovery-free address a second in-process endpoint dials in
+    /// `RelayMode::Disabled` tests — and lets a downstream crate (e.g. netengine)
+    /// build a loopback peer address **without naming any iroh type**, so iroh can
+    /// stay a transitive-only dependency behind this boundary.
+    pub fn direct_endpoint_addr(&self) -> EndpointAddr {
+        let full = self.endpoint.addr();
+        let id = self.endpoint.id();
+        let addrs: Vec<SocketAddr> = full.ip_addrs().copied().collect();
+        endpoint_addr_from_parts(id, addrs)
     }
 
     /// The underlying iroh endpoint (for the accept loop / shutdown).
@@ -383,6 +406,26 @@ pub fn endpoint_addr_from_parts(
     EndpointAddr::from_parts(node_id, direct.into_iter().map(TransportAddr::Ip))
 }
 
+/// Parse a 64-char hex NodeId string into an [`EndpointAddr`] with **no** direct
+/// addresses — iroh locates the peer via discovery/relay. This is the connect-side
+/// entry point for "dial a peer by its NodeId alone" (the `relay ping <node-id>`
+/// shape), and lets a downstream crate build a dialable peer address from a string
+/// **without naming any iroh type**, keeping iroh transitive-only behind this
+/// boundary.
+///
+/// Returns an error string for any input that is not a valid NodeId (the same
+/// validation [`parse_node_id`](super::parse_node_id) performs, then the iroh
+/// public-key decode).
+pub fn endpoint_addr_from_node_id(node_id: &str) -> Result<EndpointAddr, String> {
+    // Validate shape (64 lowercase hex) via the always-compiled allowlist parser,
+    // then decode to the iroh public key (EndpointId).
+    let normalized = super::parse_node_id(node_id)?;
+    let id: iroh::EndpointId = normalized
+        .parse()
+        .map_err(|e| format!("invalid node id {normalized:?}: {e}"))?;
+    Ok(EndpointAddr::new(id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -644,6 +687,46 @@ mod tests {
     fn relay_mode_all_invalid_falls_back_to_default() {
         let cfg = cfg_with_relays(&["not a url", "also bad", ""]);
         assert!(matches!(relay_mode_from_config(&cfg), RelayMode::Default));
+    }
+
+    /// `direct_endpoint_addr` returns the same NodeId + loopback direct addrs the
+    /// test helper builds by hand — proving a downstream crate can dial a hermetic
+    /// peer without naming any iroh type.
+    #[tokio::test]
+    async fn direct_endpoint_addr_matches_manual_direct_addr() {
+        let node = hermetic_node().await;
+        let via_method = node.direct_endpoint_addr();
+        let via_helper = direct_addr(&node);
+        assert_eq!(via_method.id, via_helper.id, "same NodeId");
+        let m: Vec<SocketAddr> = via_method.ip_addrs().copied().collect();
+        let h: Vec<SocketAddr> = via_helper.ip_addrs().copied().collect();
+        assert_eq!(m, h, "same direct ip addrs");
+        node.close().await;
+    }
+
+    /// `endpoint_addr_from_node_id` parses a node's own id string back into an
+    /// EndpointAddr carrying that exact NodeId (discovery-based: no direct addrs).
+    #[tokio::test]
+    async fn endpoint_addr_from_node_id_round_trips_the_id() {
+        let node = hermetic_node().await;
+        let id_str = node.node_id();
+        let addr = endpoint_addr_from_node_id(&id_str).expect("parse node id");
+        assert_eq!(addr.id.to_string(), id_str, "NodeId round-trips");
+        assert_eq!(
+            addr.ip_addrs().count(),
+            0,
+            "discovery-based addr carries no direct ips"
+        );
+        node.close().await;
+    }
+
+    /// `endpoint_addr_from_node_id` rejects malformed ids (deny-by-default shape
+    /// validation before the iroh decode).
+    #[test]
+    fn endpoint_addr_from_node_id_rejects_malformed() {
+        assert!(endpoint_addr_from_node_id("").is_err());
+        assert!(endpoint_addr_from_node_id("abc123").is_err());
+        assert!(endpoint_addr_from_node_id(&"z".repeat(64)).is_err());
     }
 
     /// The explicit `["disabled"]` sentinel turns relaying off (direct-only).
